@@ -33,8 +33,8 @@ use std::{
 const GENERATOR: &str = "make_tests";
 const USER: &str = "Joe Bloggs";
 
-const IMAGE_WIDTH: u32 = 2048;
-const IMAGE_HEIGHT: u32 = 1365;
+const IMAGE_WIDTH: u32 = 1024;
+const IMAGE_HEIGHT: u32 = 768;
 
 /**
 Patch new content into a file
