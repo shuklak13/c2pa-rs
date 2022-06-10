@@ -25,7 +25,7 @@
         { "op": "uri", "parent": "CA", "output": "E-uri-CA" },
         { "op": "clm", "parent": "CAICAI", "output": "E-clm-CAICAI" },
         { "op": "make", "ingredient": ["E-sig-CA"], "output": "CIE-sig-CA" },
-        { "op": "uri", "parent": "CIE-sig-CA", "output": "E-uri-CIE-sig-CA" },
+        { "op": "dat", "parent": "CIE-sig-CA", "output": "E-dat-CIE-sig-CA" },
         { "op": "make", "parent": "A.jpg", "ingredients": ["C", "A.jpg", "I.jpg", "CA", "CI", "CAI", "CICA"], "output": "CAIAIIICAICIICAIICICA" }
     ]
 }
