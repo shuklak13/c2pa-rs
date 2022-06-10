@@ -117,8 +117,12 @@ impl MakeTestImages {
             path_buf = PathBuf::from(&self.output_dir);
             path_buf.push(s);
         }
+        let has_extension = match path_buf.extension() {
+            Some(ext) => ext.to_string_lossy().len() > 0,
+            None => false,
+        };
         // add the default extension is none is supplied
-        if path_buf.extension().is_none() {
+        if !has_extension {
             path_buf.set_extension(&self.config.default_ext);
         }
         path_buf
