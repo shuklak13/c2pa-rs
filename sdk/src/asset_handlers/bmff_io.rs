@@ -1008,7 +1008,7 @@ impl AssetIO for BmffIO {
 
         // write content after ContentProvenanceBox
         input.seek(SeekFrom::Start(end as u64))?;
-        let mut chunk = vec![0u8; 1024 * 1024];
+        let mut chunk = vec![0u8; 512 * 1024 * 1024];
         loop {
             let len = match input.read(&mut chunk) {
                 Ok(0) => break,
@@ -1060,7 +1060,7 @@ impl AssetIO for BmffIO {
             _ => (), // todo: handle more patching cases as necessary
         }
 
-        std::fs::copy(temp_file.path(), asset_path)?;
+        std::fs::rename(temp_file.path(), asset_path)?;
 
         Ok(())
     }
