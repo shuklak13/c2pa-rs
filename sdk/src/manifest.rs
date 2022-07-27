@@ -490,8 +490,11 @@ impl Manifest {
         }
 
         #[cfg(feature = "add_thumbnails")]
-        if let Ok((format, image)) = crate::utils::thumbnail::make_thumbnail(path.as_ref()) {
-            self.set_thumbnail(format, image);
+        match crate::utils::thumbnail::make_thumbnail(path.as_ref()) {
+            Ok((format, image)) => {
+                self.set_thumbnail(format, image);
+            }
+            Err(e) => warn!("adding embed thumbnail {:?}", e),
         }
     }
 

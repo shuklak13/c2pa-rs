@@ -11,19 +11,26 @@
 // specific language governing permissions and limitations under
 // each license.
 
-use crate::Result;
-use image::ImageFormat;
+use crate::{Error, Result};
+use image::{ImageError, ImageFormat};
 
 ///  utility to generate a thumbnail from a file at path
 /// returns Result (format, image_bits) if successful, otherwise Error
 pub fn make_thumbnail(path: &std::path::Path) -> Result<(String, Vec<u8>)> {
-    let format = ImageFormat::from_path(path)?;
+    let format = ImageFormat::from_path(path).map_err(|e| match e {
+        ImageError::Unsupported(_e) => Error::UnsupportedType,
+        err => err.into(),
+    })?;
 
     // max edge size allowed in pixels for thumbnail creation
     const THUMBNAIL_LONGEST_EDGE: u32 = 1024;
     const THUMBNAIL_JPEG_QUALITY: u8 = 80; // JPEG quality 1-100
 
-    let mut img = image::open(path)?;
+    let mut img = image::open(path).map_err(|e| match e {
+        ImageError::Unsupported(_e) => Error::UnsupportedType,
+        err => err.into(),
+    })?;
+
     let longest_edge = THUMBNAIL_LONGEST_EDGE;
 
     // generate a thumbnail image scaled down and in jpeg format
@@ -42,7 +49,11 @@ pub fn make_thumbnail(path: &std::path::Path) -> Result<(String, Vec<u8>)> {
     };
     let thumbnail_bits = Vec::new();
     let mut cursor = std::io::Cursor::new(thumbnail_bits);
-    img.write_to(&mut cursor, output_format)?;
+    img.write_to(&mut cursor, output_format)
+        .map_err(|e| match e {
+            ImageError::Unsupported(_) => Error::UnsupportedType,
+            err => err.into(),
+        })?;
 
     let format = content_type.to_owned();
     Ok((format, cursor.into_inner()))

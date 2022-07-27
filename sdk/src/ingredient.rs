@@ -464,8 +464,12 @@ impl Ingredient {
 
         // create a thumbnail if we don't already have a manifest with a thumb we can use
         if ingredient.thumbnail.is_none() {
-            if let Some((format, image)) = options.thumbnail(path) {
-                ingredient.set_thumbnail(format, image);
+            match options.thumbnail(path) {
+                Ok((format, image)) => {
+                    ingredient.set_thumbnail(format, image);
+                }
+                Err(Error::UnsupportedType) => (), // silently ignore unsupported type errors for thumbnails
+                Err(e) => return Err(e),           // report any other error here
             }
         }
 
@@ -679,11 +683,15 @@ pub trait IngredientOptions {
     /// The first value is the content type of the thumbnail, i.e. image/jpeg
     /// The second value is bytes of the thumbnail image
     /// The default is to have no thumbnail, so you must provide an override to have a thumbnail image
-    fn thumbnail(&self, _path: &Path) -> Option<(String, Vec<u8>)> {
-        #[cfg(feature = "add_thumbnails")]
-        return crate::utils::thumbnail::make_thumbnail(_path).ok();
+    /// Error::UnsupportedType may be used to return no thumbnail
+    fn thumbnail(&self, _path: &Path) -> Result<(String, Vec<u8>)> {
+        #[cfg(feature = "add_thumbnails")] // if cfg!() won't work here for reasons unknown
+        return crate::utils::thumbnail::make_thumbnail(_path).map_err(|e| {
+            log::warn!("adding thumbnail {:?}", e);
+            e
+        });
         #[cfg(not(feature = "add_thumbnails"))]
-        None
+        Err(Error::UnsupportedType)
     }
 }
 
@@ -836,8 +844,8 @@ mod tests_file_io {
             fn hash(&self, _path: &Path) -> Option<String> {
                 Some("1234568abcdef".to_string())
             }
-            fn thumbnail(&self, _path: &Path) -> Option<(String, Vec<u8>)> {
-                Some(("image/foo".to_string(), "bits".as_bytes().to_owned()))
+            fn thumbnail(&self, _path: &Path) -> Result<(String, Vec<u8>)> {
+                Ok(("image/foo".to_string(), "bits".as_bytes().to_owned()))
             }
         }
 
