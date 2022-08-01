@@ -359,6 +359,7 @@ impl Ingredient {
     }
 
     #[cfg(feature = "file_io")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "file_io")))]
     /// Creates an `Ingredient` from a file path.
     pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self> {
         Self::from_file_with_options(path.as_ref(), &DefaultOptions {})
@@ -376,6 +377,7 @@ impl Ingredient {
 
     /// Creates an `Ingredient` from a file path and options.
     #[cfg(feature = "file_io")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "file_io")))]
     pub fn from_file_with_options<P: AsRef<Path>>(
         path: P,
         options: &dyn IngredientOptions,

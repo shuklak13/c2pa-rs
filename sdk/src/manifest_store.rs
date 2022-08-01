@@ -122,7 +122,7 @@ impl ManifestStore {
             .map(|store| Self::from_store(&store, &mut validation_log))
     }
 
-    #[cfg(feature = "file_io")]
+
     /// Loads a ManifestStore from a file
     /// Example:
     ///
@@ -135,6 +135,8 @@ impl ManifestStore {
     /// # Ok(())
     /// # }
     /// ```
+    #[cfg(feature = "file_io")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "file_io")))]
     pub fn from_file<P: AsRef<Path>>(path: P) -> Result<ManifestStore> {
         let mut validation_log = DetailedStatusTracker::new();
 
