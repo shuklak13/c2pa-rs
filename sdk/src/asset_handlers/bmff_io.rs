@@ -1127,7 +1127,7 @@ impl AssetPatch for BmffIO {
     }
 }
 
-#[cfg(feature = "bmff")]
+#[cfg(all(not(target_arch = "wasm32"), feature = "bmff"))]
 #[cfg(test)]
 pub mod tests {
     #![allow(clippy::expect_used)]

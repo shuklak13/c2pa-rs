@@ -286,6 +286,27 @@ mod tests {
         assert!(manifest.time().is_some());
     }
 
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
+    #[ignore]
+    #[allow(dead_code)]
+    async fn manifest_report_video_wasm() {
+        let video_bytes = include_bytes!("../tests/fixtures/video1.mp4");
+
+        let manifest_store =
+            ManifestStore::from_bytes_async("video/mp4", video_bytes.to_vec(), true)
+                .await
+                .unwrap();
+
+        assert!(!manifest_store.manifests.is_empty());
+        assert!(manifest_store.active_label().is_some());
+        assert!(manifest_store.get_active().is_some());
+        assert!(!manifest_store.manifests().is_empty());
+        assert!(manifest_store.validation_status().is_none());
+        let manifest = manifest_store.get_active().unwrap();
+        assert_eq!(manifest.issuer().unwrap(), "Adobe Inc.");
+        assert!(manifest.time().is_some());
+    }
+
     #[test]
     #[cfg(feature = "file_io")]
     fn manifest_report_from_file() {
