@@ -33,7 +33,6 @@ use crate::{
             CAICBORAssertionBox, CAIJSONAssertionBox, CAIUUIDAssertionBox, JumbfEmbeddedFileBox,
         },
     },
-    salt::{SaltGenerator, NO_SALT},
     status_tracker::{log_item, OneShotStatusTracker, StatusTracker},
     utils::hash_utils::{hash_by_alg, vec_compare, verify_by_alg},
     validation_status,
@@ -558,15 +557,15 @@ impl Claim {
         &mut self,
         assertion_builder: &impl AssertionBase,
     ) -> Result<C2PAAssertion> {
-        self.add_assertion_with_salt(assertion_builder, NO_SALT)
+        self.add_assertion_with_salt(assertion_builder, || None)
     }
 
     /// Add an assertion to this claim and verify with a salted assertion store
     /// This version should be used if the assertion may be redacted for addition protection.
-    pub fn add_assertion_with_salt(
+    pub fn add_assertion_with_salt<F: Fn() -> Option<Vec<u8>>>(
         &mut self,
         assertion_builder: &impl AssertionBase,
-        salt_generator: &impl SaltGenerator,
+        generate_salt: F,
     ) -> Result<C2PAAssertion> {
         // make sure the assertion is valid
         let assertion = assertion_builder.to_assertion()?;
@@ -576,7 +575,7 @@ impl Claim {
         let as_label = self.make_assertion_instance_label(assertion.label().as_ref());
 
         // Get salted hash of the assertion's contents.
-        let salt = salt_generator.generate_salt();
+        let salt = generate_salt();
 
         let hash = Claim::calc_box_hash(&as_label, &assertion, salt.clone(), self.alg())?;
 

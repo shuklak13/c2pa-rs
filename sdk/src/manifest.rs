@@ -28,7 +28,7 @@ use crate::{
     claim::{Claim, RemoteManifest},
     error::{Error, Result},
     jumbf,
-    salt::DefaultSalt,
+    salt::{DefaultSalt, SaltGenerator},
     store::Store,
     Ingredient, ManifestAssertion, ManifestAssertionKind,
 };
@@ -157,6 +157,11 @@ impl Manifest {
     /// Returns Assertions for this Manifest
     pub fn assertions(&self) -> &[ManifestAssertion] {
         &self.assertions
+    }
+
+    /// Returns Assertions for this Manifest
+    pub fn redactions(&self) -> Option<&[String]> {
+        self.redactions.as_deref()
     }
 
     /// Returns Verifiable Credentials
@@ -535,10 +540,12 @@ impl Manifest {
         if self.title().is_none() {
             self.set_title(ingredient.title());
         }
-
-        #[cfg(feature = "add_thumbnails")]
-        if let Ok((format, image)) = crate::utils::thumbnail::make_thumbnail(path.as_ref()) {
-            self.set_thumbnail(format, image);
+        // add thumbnail if we don't already have one
+        if self.thumbnail().is_none() {
+            #[cfg(feature = "add_thumbnails")]
+            if let Ok((format, image)) = crate::utils::thumbnail::make_thumbnail(path.as_ref()) {
+                self.set_thumbnail(format, image);
+            }
         }
     }
 
@@ -590,10 +597,8 @@ impl Manifest {
 
         // add all ingredients to the claim
         for ingredient in &self.ingredients {
-            ingredient.add_to_claim(&mut claim, self.redactions.clone())?;
+            ingredient.add_to_claim(&mut claim, self)?;
         }
-
-        let salt = DefaultSalt::default();
 
         // add any additional assertions
         for manifest_assertion in &self.assertions {
@@ -602,7 +607,7 @@ impl Manifest {
                     let actions: Actions = manifest_assertion.to_assertion()?;
                     // todo: fixup parameters field from instance_id to ingredient uri for
                     // c2pa.transcoded, c2pa.repackaged, and c2pa.placed action
-                    claim.add_assertion(&actions)
+                    claim.add_assertion_with_salt(&actions, || self.generate_salt())
                 }
                 CreativeWork::LABEL => {
                     let mut cw: CreativeWork = manifest_assertion.to_assertion()?;
@@ -623,11 +628,11 @@ impl Manifest {
                         }
                         cw = cw.set_author(&authors)?;
                     }
-                    claim.add_assertion_with_salt(&cw, &salt)
+                    claim.add_assertion_with_salt(&cw, || self.generate_salt())
                 }
                 Exif::LABEL => {
                     let exif: Exif = manifest_assertion.to_assertion()?;
-                    claim.add_assertion_with_salt(&exif, &salt)
+                    claim.add_assertion_with_salt(&exif, || self.generate_salt())
                 }
                 _ => match manifest_assertion.kind() {
                     ManifestAssertionKind::Cbor => claim.add_assertion_with_salt(
@@ -635,14 +640,14 @@ impl Manifest {
                             manifest_assertion.label(),
                             serde_cbor::to_vec(&manifest_assertion.value()?)?,
                         ),
-                        &salt,
+                        || self.generate_salt(),
                     ),
                     ManifestAssertionKind::Json => claim.add_assertion_with_salt(
                         &User::new(
                             manifest_assertion.label(),
                             &serde_json::to_string(&manifest_assertion.value()?)?,
                         ),
-                        &salt,
+                        || self.generate_salt(),
                     ),
                     ManifestAssertionKind::Binary => {
                         // todo: Support binary kinds
@@ -783,6 +788,14 @@ impl std::fmt::Display for Manifest {
         f.write_str(&json)
     }
 }
+
+// implement a default salt generator so it can be overridden if needed
+impl SaltGenerator for &Manifest {
+    fn generate_salt(&self) -> Option<Vec<u8>> {
+        DefaultSalt::default().generate_salt()
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 /// Holds information about a signature
 pub struct SignatureInfo {

@@ -25,8 +25,10 @@ use crate::{
     error::{Error, Result},
     hashed_uri::HashedUri,
     jumbf,
+    salt::SaltGenerator,
     store::Store,
     validation_status::{self, ValidationStatus},
+    Manifest,
 };
 #[cfg(feature = "file_io")]
 use crate::{error::wrap_io_err, validation_status::status_for_store, xmp_inmemory_utils::XmpInfo};
@@ -568,11 +570,7 @@ impl Ingredient {
     }
 
     /// Converts a higher level Ingredient into the appropriate components in a claim
-    pub(crate) fn add_to_claim(
-        &self,
-        claim: &mut Claim,
-        redactions: Option<Vec<String>>,
-    ) -> Result<HashedUri> {
+    pub(crate) fn add_to_claim(&self, claim: &mut Claim, manifest: &Manifest) -> Result<HashedUri> {
         let mut thumbnail = None;
 
         // add the ingredient manifest_data to the claim
@@ -586,7 +584,7 @@ impl Ingredient {
 
                 //if this is the parent ingredient then apply any redactions, converting from labels to uris
                 let redactions = match self.is_parent() {
-                    true => redactions.as_ref().map(|redactions| {
+                    true => manifest.redactions().as_ref().map(|redactions| {
                         redactions
                             .iter()
                             .map(|r| jumbf::labels::to_assertion_uri(&manifest_label, r))
@@ -657,10 +655,13 @@ impl Ingredient {
         // add ingredient thumbnail assertion if one is given and we don't already have one from the parent claim
         if thumbnail.is_none() {
             if let Some((format, image)) = &self.thumbnail() {
-                let hash_url = claim.add_assertion(&Thumbnail::new(
-                    &labels::add_thumbnail_format(labels::INGREDIENT_THUMBNAIL, format),
-                    image.to_vec(),
-                ))?;
+                let hash_url = claim.add_assertion_with_salt(
+                    &Thumbnail::new(
+                        &labels::add_thumbnail_format(labels::INGREDIENT_THUMBNAIL, format),
+                        image.to_vec(),
+                    ),
+                    || manifest.generate_salt(),
+                )?;
 
                 thumbnail = Some(hash_url);
             }
@@ -678,7 +679,7 @@ impl Ingredient {
         ingredient_assertion.thumbnail = thumbnail;
         ingredient_assertion.metadata = self.metadata.clone();
         ingredient_assertion.validation_status = self.validation_status.clone();
-        claim.add_assertion(&ingredient_assertion)
+        claim.add_assertion_with_salt(&ingredient_assertion, || manifest.generate_salt())
     }
 }
 

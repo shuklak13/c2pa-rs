@@ -14,14 +14,15 @@
 //! Constructs a set of test images using a configuration script
 use std::{
     fs,
+    ops::{Deref, DerefMut},
     path::{Path, PathBuf},
 };
 
 use anyhow::{Context, Result};
 use c2pa::{
     assertions::{c2pa_action, Action, Actions, CreativeWork, SchemaDotOrgPerson},
-    create_signer, jumbf_io, Error, Ingredient, IngredientOptions, Manifest, ManifestStore, Signer,
-    SigningAlg,
+    create_signer, jumbf_io, Error, Ingredient, IngredientOptions, Manifest, ManifestStore,
+    SaltGenerator, Signer, SigningAlg,
 };
 use image::GenericImageView;
 use nom::AsBytes;
@@ -117,6 +118,28 @@ fn blake3_hash(path: &Path) -> Result<String> {
     Ok(hash.to_hex().as_str().to_owned())
 }
 
+struct NoSaltManifest(Manifest);
+
+impl Deref for NoSaltManifest {
+    type Target = Manifest;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for NoSaltManifest {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl SaltGenerator for NoSaltManifest {
+    fn generate_salt(&self) -> Option<Vec<u8>> {
+        None
+    }
+}
+
 /// Tool for building test case images for C2PA
 pub struct MakeTestImages {
     config: Config,
@@ -200,7 +223,9 @@ impl MakeTestImages {
         }
 
         let generator = format!("{}/{}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"));
-        let mut manifest = Manifest::new(generator);
+
+        let mut manifest = NoSaltManifest(Manifest::new(generator));
+
         manifest.set_vendor("contentauth".to_owned()); // needed for generating error cases below
 
         if let Some(user) = self.config.author.as_ref() {

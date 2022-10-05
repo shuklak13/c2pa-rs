@@ -20,7 +20,7 @@ use tempfile::TempDir;
 use crate::{
     assertions::{labels, Action, Actions, Ingredient, ReviewRating, SchemaDotOrg, Thumbnail},
     claim::Claim,
-    salt::DefaultSalt,
+    salt::{DefaultSalt, SaltGenerator},
     store::Store,
     Result,
 };
@@ -61,6 +61,8 @@ pub const TEST_VC: &str = r#"{
 
 /// creates a claim for testing
 pub fn create_test_claim() -> Result<Claim> {
+    let generate_salt = || DefaultSalt::default().generate_salt();
+
     let mut claim = Claim::new("adobe unit test", Some("adobe"));
 
     // add VC entry
@@ -115,7 +117,7 @@ pub fn create_test_claim() -> Result<Claim> {
     claim.add_assertion(&claim_review)?;
     claim.add_assertion(&thumbnail_claim)?;
 
-    let thumb_uri = claim.add_assertion_with_salt(&thumbnail_ingred, &DefaultSalt::default())?;
+    let thumb_uri = claim.add_assertion_with_salt(&thumbnail_ingred, generate_salt)?;
 
     let review = ReviewRating::new(
         "a 3rd party plugin was used",
@@ -142,8 +144,8 @@ pub fn create_test_claim() -> Result<Claim> {
     )
     .set_thumbnail(Some(&thumb_uri));
 
-    claim.add_assertion_with_salt(&ingredient, &DefaultSalt::default())?;
-    claim.add_assertion_with_salt(&ingredient2, &DefaultSalt::default())?;
+    claim.add_assertion_with_salt(&ingredient, generate_salt)?;
+    claim.add_assertion_with_salt(&ingredient2, generate_salt)?;
 
     Ok(claim)
 }
