@@ -2775,6 +2775,69 @@ pub mod tests {
     }
 
     #[test]
+    #[cfg(feature = "file_io")]
+    fn test_redaction() {
+        use crate::{hashed_uri::HashedUri, utils::test::create_test_store};
+
+        let signer = temp_signer();
+
+        // test adding to actual image
+        let ap = fixture_path("earth_apollo17.jpg");
+        let temp_dir = tempdir().expect("temp dir");
+        let op = temp_dir_path(&temp_dir, "readacted.jpg");
+
+        // get default store with default claim
+        let mut store = create_test_store().unwrap();
+
+        // save to output
+        store
+            .save_to_asset(ap.as_path(), &signer, op.as_path())
+            .unwrap();
+
+        let mut report = OneShotStatusTracker::default();
+        // read back in
+        let mut restored_store = Store::load_from_asset(op.as_path(), true, &mut report).unwrap();
+
+        let pc = restored_store.provenance_claim().unwrap();
+
+        // should be a regular manifest
+        assert!(!pc.update_manifest());
+
+        // create a new update manifest
+        let mut claim = Claim::new("adobe unit test", Some("update_manfifest"));
+
+        // must contain an ingredient
+        let parent_hashed_uri = HashedUri::new(
+            restored_store.provenance_path().unwrap(),
+            Some(pc.alg().to_string()),
+            &pc.hash(),
+        );
+
+        let ingredient = Ingredient::new(
+            "update_manifest.jpg",
+            "image/jpeg",
+            "xmp.iid:7b57930e-2f23-47fc-affe-0400d70b738d",
+            Some("xmp.did:87d51599-286e-43b2-9478-88c79f49c347"),
+        )
+        .set_parent()
+        .set_c2pa_manifest_from_hashed_uri(Some(parent_hashed_uri));
+
+        claim.add_assertion(&ingredient).unwrap();
+
+        restored_store.commit_update_manifest(claim).unwrap();
+        restored_store
+            .save_to_asset(op.as_path(), &signer, op.as_path())
+            .unwrap();
+
+        // read back in store with update manifest
+        let um_store = Store::load_from_asset(op.as_path(), true, &mut report).unwrap();
+
+        let um = um_store.provenance_claim().unwrap();
+
+        // should be an update manifest
+        assert!(um.update_manifest());
+    }
+    #[test]
     fn test_claim_decoding() {
         // modify a required field label in the claim - causes failure to read claim from cbor
         let report = patch_and_report("C.jpg", b"claim_generator", b"claim_generatur");

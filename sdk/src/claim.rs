@@ -737,7 +737,6 @@ impl Claim {
         }
     }
 
-    /// Not ready for use!!!!!
     /// Redact an assertion from a prior claim.
     /// This will remove the assertion from the JUMBF
     fn redact_assertion(&mut self, assertion_uri: &str) -> Result<()> {
@@ -930,7 +929,7 @@ impl Claim {
             }
         };
 
-        // check for self redacted assertions and illegal readactions
+        // check for self redacted assertions and illegal redactions
         if let Some(redactions) = claim.redactions() {
             for r in redactions {
                 let r_manifest = jumbf::labels::manifest_label_from_uri(r)
@@ -959,20 +958,23 @@ impl Claim {
             }
         }
 
-        // make sure UpdateManifests do not contain actions
-        if claim.update_manifest() && claim.label().contains(assertions::labels::ACTIONS) {
-            let log_item = log_item!(
-                claim.uri(),
-                "update manifests cannot contain actions",
-                "verify_internal"
-            )
-            .error(Error::UpdateManifestInvalid)
-            .validation_status(validation_status::MANIFEST_UPDATE_INVALID);
-            validation_log.log(log_item, Some(Error::UpdateManifestInvalid))?;
-        }
+
         // verify assertion structure comparing hashes from assertion list to contents of assertion store
         for assertion in claim.assertions() {
             let (label, instance) = Claim::assertion_label_from_link(&assertion.url());
+
+            // make sure UpdateManifests do not contain actions
+            if claim.update_manifest() && label.contains(assertions::labels::ACTIONS) {
+                let log_item = log_item!(
+                    claim.uri(),
+                    "update manifests cannot contain actions",
+                    "verify_internal"
+                )
+                .error(Error::UpdateManifestInvalid)
+                .validation_status(validation_status::MANIFEST_UPDATE_INVALID);
+                validation_log.log(log_item, Some(Error::UpdateManifestInvalid))?;
+            }
+
             match claim.get_claim_assertion(&label, instance) {
                 // get the assertion if label and hash match
                 Some(ca) => {
@@ -1175,7 +1177,7 @@ impl Claim {
         self.assertions_by_type(&dummy_bmff_hash)
     }
     /// Return list of ingredient assertions. This function
-    /// is only useful on commited or loaded claims since ingredients
+    /// is only useful on committed or loaded claims since ingredients
     /// are resolved at commit time.
     pub fn ingredient_assertions(&self) -> Vec<&Assertion> {
         let dummy_data = AssertionData::Cbor(Vec::new());
