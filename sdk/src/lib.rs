@@ -128,6 +128,7 @@ pub(crate) mod assertion;
 pub(crate) mod asset_handlers;
 pub(crate) mod asset_io;
 pub(crate) mod claim;
+pub(crate) mod claim_generator_info;
 
 #[cfg(feature = "file_io")]
 pub mod cose_sign;

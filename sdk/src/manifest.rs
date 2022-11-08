@@ -26,6 +26,7 @@ use crate::{
     assertion::{AssertionBase, AssertionData},
     assertions::{labels, Actions, CreativeWork, Exif, Thumbnail, User, UserCbor},
     claim::{Claim, RemoteManifest},
+    claim_generator_info::ClaimGeneratorInfo,
     error::{Error, Result},
     jumbf,
     salt::DefaultSalt,
@@ -64,7 +65,7 @@ pub struct Manifest {
     instance_id: String,
 
     #[serde(skip_serializing_if = "Option::is_none")]
-    claim_generator_hints: Option<HashMap<String, Value>>,
+    claim_generator_info: Option<Vec<ClaimGeneratorInfo>>,
 
     #[serde(skip_serializing_if = "skip_serializing_thumbnails")]
     thumbnail: Option<(String, Vec<u8>)>,
@@ -104,7 +105,7 @@ impl Manifest {
             format: "application/octet-stream".to_owned(),
             instance_id: format!("xmp:iid:{}", Uuid::new_v4()),
             claim_generator: claim_generator.into(),
-            claim_generator_hints: None,
+            claim_generator_info: None,
             thumbnail: None,
             ingredients: Vec::new(),
             assertions: Vec::new(),
@@ -428,7 +429,7 @@ impl Manifest {
         let mut manifest = Manifest::new(claim_generator);
 
         manifest.set_label(claim.label());
-        manifest.claim_generator_hints = claim.get_claim_generator_hint_map().cloned();
+        manifest.claim_generator_info = claim.get_claim_generator_info().map(|v| v.to_vec());
 
         // get credentials converting from AssertionData to Value
         let credentials: Vec<Value> = claim

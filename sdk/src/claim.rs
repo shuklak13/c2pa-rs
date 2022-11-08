@@ -24,6 +24,7 @@ use crate::{
         AssertionBase, AssertionData,
     },
     assertions::{self, labels, BmffHash, DataHash},
+    claim_generator_info::ClaimGeneratorInfo,
     cose_validator::{get_signing_info, verify_cose, verify_cose_async},
     error::{Error, Result},
     hashed_uri::HashedUri,
@@ -44,9 +45,6 @@ const BUILD_HASH_ALG: &str = "sha256";
 
 /// JSON structure representing an Assertion reference in a Claim's "assertions" list
 use HashedUri as C2PAAssertion;
-
-const GH_FULL_VERSION_LIST: &str = "Sec-CH-UA-Full-Version-List";
-const GH_UA: &str = "Sec-CH-UA";
 
 pub enum ClaimAssetData<'a> {
     PathData(&'a Path),
@@ -221,7 +219,7 @@ pub struct Claim {
     alg_soft: Option<String>, // hashing algorithm for soft bindings
 
     #[serde(skip_serializing_if = "Option::is_none")]
-    claim_generator_hints: Option<HashMap<String, Value>>,
+    claim_generator_info: Option<Vec<ClaimGeneratorInfo>>,
 }
 
 /// Enum to define how assertions are are stored when output to json
@@ -297,7 +295,7 @@ impl Claim {
             redacted_assertions: None,
             alg: Some(BUILD_HASH_ALG.to_string()),
             alg_soft: None,
-            claim_generator_hints: None,
+            claim_generator_info: None,
 
             title: None,
             format: "".to_string(),
@@ -328,7 +326,7 @@ impl Claim {
             redacted_assertions: None,
             alg: Some(BUILD_HASH_ALG.into()),
             alg_soft: None,
-            claim_generator_hints: None,
+            claim_generator_info: None,
 
             title: None,
             format: "".to_string(),
@@ -464,43 +462,16 @@ impl Claim {
     pub(crate) fn set_update_manifest(&mut self, is_update_manifest: bool) {
         self.update_manifest = is_update_manifest;
     }
-    pub fn add_claim_generator_hint(&mut self, hint_key: &str, hint_value: Value) {
-        if self.claim_generator_hints.is_none() {
-            self.claim_generator_hints = Some(HashMap::new());
-        }
 
-        if let Some(map) = &mut self.claim_generator_hints {
-            // if the key is already there do we need to merge the new value, so get its value
-            let curr_val = match hint_key {
-                // keys where new values should be merges
-                GH_UA | GH_FULL_VERSION_LIST => {
-                    if let Some(curr_ch_ua) = map.get(hint_key) {
-                        curr_ch_ua.as_str().map(|curr_val| curr_val.to_owned())
-                    } else {
-                        None
-                    }
-                }
-                _ => None,
-            };
-
-            // had an existing value so merge
-            if let Some(curr_val) = curr_val {
-                if let Some(append_val) = hint_value.as_str() {
-                    map.insert(
-                        hint_key.to_string(),
-                        Value::String(format!("{}, {}", curr_val, append_val)),
-                    );
-                }
-                return;
-            }
-
-            // all other keys treat as replacement
-            map.insert(hint_key.to_string(), hint_value);
-        }
+    pub fn add_claim_generator_info(&mut self, info: ClaimGeneratorInfo) {
+        match self.claim_generator_info.as_mut() {
+            Some(generators) => generators.push(info),
+            None => self.claim_generator_info = Some(Vec::from([info])),
+        };
     }
 
-    pub fn get_claim_generator_hint_map(&self) -> Option<&HashMap<String, Value>> {
-        self.claim_generator_hints.as_ref()
+    pub fn get_claim_generator_info(&self) -> Option<&[ClaimGeneratorInfo]> {
+        self.claim_generator_info.as_deref()
     }
 
     pub fn calc_box_hash(
@@ -1683,24 +1654,21 @@ pub mod tests {
     }
 
     #[test]
-    fn test_build_claim_generator_hints() {
+    fn test_build_claim_generator_info() {
         // Create a new claim.
         let mut claim = create_test_claim().expect("create test claim");
 
-        claim.add_claim_generator_hint(
-            GH_FULL_VERSION_LIST,
-            Value::String(r#""user app";v="2.3.4""#.to_string()),
-        );
-        claim.add_claim_generator_hint(
-            GH_FULL_VERSION_LIST,
-            Value::String(r#""some toolkit";v="1.0.0""#.to_string()),
-        );
+        let info = ClaimGeneratorInfo::new("user_app").set_version("2.3.4");
+        claim.add_claim_generator_info(info);
 
-        let expected_value = r#""user app";v="2.3.4", "some toolkit";v="1.0.0""#;
+        claim
+            .add_claim_generator_info(ClaimGeneratorInfo::new("some toolkit").set_version("1.0.0"));
 
-        let cg_map = claim.get_claim_generator_hint_map().unwrap();
-        let value = &cg_map[GH_FULL_VERSION_LIST];
-
-        assert_eq!(expected_value, value.as_str().unwrap());
+        let info_vec = claim.get_claim_generator_info().unwrap();
+        assert_eq!(info_vec.len(), 2);
+        assert_eq!(info_vec[0].name(), "user_app");
+        assert_eq!(info_vec[0].version(), Some("2.3.4"));
+        assert_eq!(info_vec[1].name(), "some toolkit");
+        assert_eq!(info_vec[1].version(), Some("1.0.0"));
     }
 }
