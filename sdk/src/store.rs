@@ -2777,25 +2777,33 @@ pub mod tests {
     #[test]
     #[cfg(feature = "file_io")]
     fn test_redaction() {
-        use crate::{hashed_uri::HashedUri, utils::test::create_test_store};
+        use crate::{hashed_uri::HashedUri, assertions::labels::JPEG_INGREDIENT_THUMBNAIL};
 
-        let signer = temp_signer();
+        let _signer = temp_signer();
 
         // test adding to actual image
-        let ap = fixture_path("earth_apollo17.jpg");
+        let ap = fixture_path("CA.jpg");
         let temp_dir = tempdir().expect("temp dir");
-        let op = temp_dir_path(&temp_dir, "readacted.jpg");
-
-        // get default store with default claim
-        let mut store = create_test_store().unwrap();
-
-        // save to output
-        store
-            .save_to_asset(ap.as_path(), &signer, op.as_path())
-            .unwrap();
-
+        let _op = temp_dir_path(&temp_dir, "readacted.jpg");
+        
         let mut report = OneShotStatusTracker::default();
-        // read back in
+       
+        // get default store with default claim
+        let store = Store::load_from_asset(ap.as_path(), true, &mut report).unwrap();
+
+        // get label of thumbnail we want to redact
+        let pc = store.provenance_claim().unwrap();
+        let thumb_assertion = pc.get_assertion(JPEG_INGREDIENT_THUMBNAIL, 0).unwrap();
+        let thumb_hashed_uri: &HashedUri = pc.assertion_hashed_uri_from_label(&thumb_assertion.label()).unwrap();
+        let thumb_path = if thumb_hashed_uri.is_relative_url() {
+            pc.assertion_uri(&thumb_assertion.label())
+        } else {
+            thumb_hashed_uri.url()
+        };
+
+        print!("Redact assertion: {}", thumb_path);
+        /* 
+         // read back in
         let mut restored_store = Store::load_from_asset(op.as_path(), true, &mut report).unwrap();
 
         let pc = restored_store.provenance_claim().unwrap();
@@ -2804,7 +2812,7 @@ pub mod tests {
         assert!(!pc.update_manifest());
 
         // create a new update manifest
-        let mut claim = Claim::new("adobe unit test", Some("update_manfifest"));
+        let mut claim = Claim::new("adobe unit test", Some("redacted_manfifest"));
 
         // must contain an ingredient
         let parent_hashed_uri = HashedUri::new(
@@ -2836,6 +2844,7 @@ pub mod tests {
 
         // should be an update manifest
         assert!(um.update_manifest());
+        */
     }
     #[test]
     fn test_claim_decoding() {
