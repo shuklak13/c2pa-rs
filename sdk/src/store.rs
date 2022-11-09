@@ -1895,7 +1895,11 @@ impl Store {
                             Store::fetch_remote_manifest(&ext_ref)
                         } else {
                             // return an error with the url that should be read
-                            Err(Error::RemoteManifestUrl(ext_ref))
+                            if is_remote_url {
+                                Err(Error::RemoteManifestUrl(ext_ref))
+                            } else {
+                                Err(Error::JumbfNotFound)
+                            }
                         }
                     } else {
                         Err(Error::JumbfNotFound)
@@ -2979,6 +2983,20 @@ pub mod tests {
     }
 
     #[test]
+    #[cfg(all(feature = "file_io"))]
+    fn test_removed_jumbf() {
+        // test adding to actual image
+        let ap = fixture_path("no_manifest.jpg");
+
+        let mut report = DetailedStatusTracker::new();
+
+        // can we read back in
+        let _store = Store::load_from_asset(&ap, true, &mut report);
+
+        assert!(report_has_err(report.get_log(), Error::JumbfNotFound));
+    }
+
+    #[test]
     fn test_external_manifest_sidecar() {
         // test adding to actual image
         let ap = fixture_path("libpng-test.png");
@@ -3178,6 +3196,74 @@ pub mod tests {
                 Error::RemoteManifestUrl(url) => assert_eq!(url, url_string),
                 _ => panic!("unexepected error"),
             },
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "file_io")]
+    fn test_tiff_jumbf_generation() {
+        // test adding to actual image
+        let ap = fixture_path("TUSCANY.TIF");
+        let temp_dir = tempdir().expect("temp dir");
+        let op = temp_dir_path(&temp_dir, "TUSCANY-OUTPUT.TIF");
+
+        // Create claims store.
+        let mut store = Store::new();
+
+        // Create a new claim.
+        let claim1 = create_test_claim().unwrap();
+
+        // Create a new claim.
+        let mut claim2 = Claim::new("Photoshop", Some("Adobe"));
+        create_editing_claim(&mut claim2).unwrap();
+
+        // Create a 3rd party claim
+        let mut claim_capture = Claim::new("capture", Some("claim_capture"));
+        create_capture_claim(&mut claim_capture).unwrap();
+
+        // Do we generate JUMBF?
+        let signer = temp_signer();
+
+        // Move the claim to claims list. Note this is not real, the claims would have to be signed in between commmits
+        store.commit_claim(claim1).unwrap();
+        store.save_to_asset(&ap, &signer, &op).unwrap();
+        store.commit_claim(claim_capture).unwrap();
+        store.save_to_asset(&op, &signer, &op).unwrap();
+        store.commit_claim(claim2).unwrap();
+        store.save_to_asset(&op, &signer, &op).unwrap();
+
+        println!("Provenance: {}\n", store.provenance_path().unwrap());
+
+        let mut report = DetailedStatusTracker::new();
+
+        // read from new file
+        let new_store = Store::load_from_asset(&op, true, &mut report).unwrap();
+
+        // dump store and compare to original
+        for claim in new_store.claims() {
+            let _restored_json = claim
+                .to_json(AssertionStoreJsonFormat::OrderedList, false)
+                .unwrap();
+            let _orig_json = store
+                .get_claim(claim.label())
+                .unwrap()
+                .to_json(AssertionStoreJsonFormat::OrderedList, false)
+                .unwrap();
+
+            println!(
+                "Claim: {} \n{}",
+                claim.label(),
+                claim
+                    .to_json(AssertionStoreJsonFormat::OrderedListNoBinary, true)
+                    .expect("could not restore from json")
+            );
+
+            for hashed_uri in claim.assertions() {
+                let (label, instance) = Claim::assertion_label_from_link(&hashed_uri.url());
+                claim
+                    .get_claim_assertion(&label, instance)
+                    .expect("Should find assertion");
+            }
         }
     }
 }
