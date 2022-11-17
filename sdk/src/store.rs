@@ -17,6 +17,7 @@ use std::{collections::HashMap, io::Cursor};
 #[cfg(feature = "file_io")]
 use std::{fs, path::Path};
 
+use async_recursion::async_recursion;
 use log::error;
 
 #[cfg(all(feature = "xmp_write", feature = "file_io"))]
@@ -982,11 +983,43 @@ impl Store {
         }
     }
 
-    // wake the ingredients and validate
+    /* Work on hold until our implmentation for Actions complies with this
+    // check actions rules
+    fn actions_check(
+        store: &Store,
+        claim: &Claim,
+        validation_log: &mut impl StatusTracker,
+    ) -> Result<()> {
+        for aa in claim.get_assertions_by_root_label(assertions::labels::ACTIONS) {
+              // verify action requirements
+              let actions = Actions::from_assertion(aa.assertion())?;
+
+              for a in actions.actions() {
+                  match a.action.as_ref() {
+                    OPENED |PLACED | REMOVED | REPACKAGED | TRAMSCODED => {
+                      // make sure assertion has valid ingredient
+                      if let Some(i_uri) = a.get_parameter("ingredient") {
+
+                      } else {
+
+                      }
+
+                    }
+                    _ => continue,
+                  }
+              }
+        }
+
+        Ok(())
+    }
+    */
+
+    // make the ingredients and validate
     fn ingredient_checks<'a>(
         store: &Store,
         claim: &Claim,
         asset_data: &ClaimAssetData<'a>,
+        active_redactions: &mut Vec<String>,
         validation_log: &mut impl StatusTracker,
     ) -> Result<()> {
         let mut num_parent_ofs = 0;
@@ -1027,9 +1060,28 @@ impl Store {
                         )?;
                     }
 
-                    // make sure
                     // verify the ingredient claim
-                    Claim::verify_claim(ingredient, asset_data, false, validation_log)?;
+                    Claim::verify_claim(
+                        ingredient,
+                        asset_data,
+                        false,
+                        active_redactions,
+                        validation_log,
+                    )?;
+
+                    // add to running redaction list
+                    if let Some(current_redactions) = claim.redactions() {
+                        active_redactions.append(&mut current_redactions.clone());
+                    }
+
+                    // recurse down the ingredient chain
+                    Store::ingredient_checks(
+                        store,
+                        ingredient,
+                        asset_data,
+                        active_redactions,
+                        validation_log,
+                    )?;
                 } else {
                     let log_item = log_item!(
                         &c2pa_manifest.url(),
@@ -1093,10 +1145,12 @@ impl Store {
     }
 
     // wake the ingredients and validate
+    #[async_recursion(?Send)]
     async fn ingredient_checks_async(
         store: &Store,
         claim: &Claim,
         asset_bytes: &[u8],
+        active_redactions: &mut Vec<String>,
         validation_log: &mut impl StatusTracker,
     ) -> Result<()> {
         // walk the ingredients
@@ -1131,8 +1185,29 @@ impl Store {
                         )?;
                     }
                     // verify the ingredient claim
-                    Claim::verify_claim_async(ingredient, asset_bytes, false, validation_log)
-                        .await?;
+                    Claim::verify_claim_async(
+                        ingredient,
+                        asset_bytes,
+                        false,
+                        active_redactions,
+                        validation_log,
+                    )
+                    .await?;
+
+                    // add to running redaction list
+                    if let Some(current_redactions) = claim.redactions() {
+                        active_redactions.append(&mut current_redactions.clone());
+                    }
+
+                    // recurse down the ingredient chain
+                    Store::ingredient_checks_async(
+                        store,
+                        ingredient,
+                        asset_bytes,
+                        active_redactions,
+                        validation_log,
+                    )
+                    .await?;
                 } else {
                     let log_item = log_item!(
                         &c2pa_manifest.url(),
@@ -1181,10 +1256,29 @@ impl Store {
             }
         };
 
-        // verify the provenance claim
-        Claim::verify_claim_async(claim, asset_bytes, true, validation_log).await?;
+        let mut active_redactions = match claim.redactions() {
+            Some(r) => r.clone(),
+            None => Vec::new(),
+        };
 
-        Store::ingredient_checks_async(store, claim, asset_bytes, validation_log).await?;
+        // verify the provenance claim
+        Claim::verify_claim_async(
+            claim,
+            asset_bytes,
+            true,
+            &mut active_redactions,
+            validation_log,
+        )
+        .await?;
+
+        Store::ingredient_checks_async(
+            store,
+            claim,
+            asset_bytes,
+            &mut active_redactions,
+            validation_log,
+        )
+        .await?;
 
         Ok(())
     }
@@ -1212,10 +1306,27 @@ impl Store {
             }
         };
 
-        // verify the provenance claim
-        Claim::verify_claim(claim, asset_data, true, validation_log)?;
+        let mut active_redactions = match claim.redactions() {
+            Some(r) => r.clone(),
+            None => Vec::new(),
+        };
 
-        Store::ingredient_checks(store, claim, asset_data, validation_log)?;
+        // verify the provenance claim
+        Claim::verify_claim(
+            claim,
+            asset_data,
+            true,
+            &mut active_redactions,
+            validation_log,
+        )?;
+
+        Store::ingredient_checks(
+            store,
+            claim,
+            asset_data,
+            &mut active_redactions,
+            validation_log,
+        )?;
 
         Ok(())
     }
@@ -2914,7 +3025,7 @@ pub mod tests {
     #[test]
     #[cfg(feature = "file_io")]
     fn test_redaction() {
-        use crate::{hashed_uri::HashedUri, assertions::labels::JPEG_INGREDIENT_THUMBNAIL};
+        use crate::{assertions::labels::JPEG_INGREDIENT_THUMBNAIL, hashed_uri::HashedUri};
 
         let _signer = temp_signer();
 
@@ -2922,16 +3033,18 @@ pub mod tests {
         let ap = fixture_path("CA.jpg");
         let temp_dir = tempdir().expect("temp dir");
         let _op = temp_dir_path(&temp_dir, "readacted.jpg");
-        
+
         let mut report = OneShotStatusTracker::default();
-       
+
         // get default store with default claim
         let store = Store::load_from_asset(ap.as_path(), true, &mut report).unwrap();
 
         // get label of thumbnail we want to redact
         let pc = store.provenance_claim().unwrap();
         let thumb_assertion = pc.get_assertion(JPEG_INGREDIENT_THUMBNAIL, 0).unwrap();
-        let thumb_hashed_uri: &HashedUri = pc.assertion_hashed_uri_from_label(&thumb_assertion.label()).unwrap();
+        let thumb_hashed_uri: &HashedUri = pc
+            .assertion_hashed_uri_from_label(&thumb_assertion.label())
+            .unwrap();
         let thumb_path = if thumb_hashed_uri.is_relative_url() {
             pc.assertion_uri(&thumb_assertion.label())
         } else {
@@ -2939,7 +3052,7 @@ pub mod tests {
         };
 
         print!("Redact assertion: {}", thumb_path);
-        /* 
+        /*
          // read back in
         let mut restored_store = Store::load_from_asset(op.as_path(), true, &mut report).unwrap();
 

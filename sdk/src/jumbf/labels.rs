@@ -124,6 +124,11 @@ pub(crate) fn manifest_label_from_uri(uri: &str) -> Option<String> {
     }
 }
 
+// Give a JUMBF URI return whether the URI is relative
+pub(crate) fn uri_is_relative(uri: &str) -> bool {
+    manifest_label_from_uri(uri).is_none()
+}
+
 // Extract an assertion label from a JUMBF URI.
 pub(crate) fn assertion_label_from_uri(uri: &str) -> Option<String> {
     let raw_uri = to_normalized_uri(uri);

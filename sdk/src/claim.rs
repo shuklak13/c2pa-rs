@@ -32,6 +32,7 @@ use crate::{
         boxes::{
             CAICBORAssertionBox, CAIJSONAssertionBox, CAIUUIDAssertionBox, JumbfEmbeddedFileBox,
         },
+        labels::{assertion_label_from_uri, manifest_label_from_uri, uri_is_relative},
     },
     salt::{SaltGenerator, NO_SALT},
     status_tracker::{log_item, OneShotStatusTracker, StatusTracker},
@@ -801,6 +802,7 @@ impl Claim {
         claim: &Claim,
         asset_bytes: &'a [u8],
         is_provenance: bool,
+        active_redactions: &mut Vec<String>,
         validation_log: &mut impl StatusTracker,
     ) -> Result<()> {
         // Parse COSE signed data (signature) and validate it.
@@ -841,6 +843,7 @@ impl Claim {
             claim,
             &ClaimAssetData::ByteData(asset_bytes),
             is_provenance,
+            active_redactions,
             verified,
             validation_log,
         )
@@ -853,6 +856,7 @@ impl Claim {
         claim: &Claim,
         asset_data: &ClaimAssetData<'a>,
         is_provenance: bool,
+        active_redactions: &mut Vec<String>,
         validation_log: &mut impl StatusTracker,
     ) -> Result<()> {
         // Parse COSE signed data (signature) and validate it.
@@ -883,13 +887,21 @@ impl Claim {
 
         let verified = verify_cose(sig, data, &additional_bytes, !is_provenance, validation_log);
 
-        Claim::verify_internal(claim, asset_data, is_provenance, verified, validation_log)
+        Claim::verify_internal(
+            claim,
+            asset_data,
+            is_provenance,
+            active_redactions,
+            verified,
+            validation_log,
+        )
     }
 
     fn verify_internal<'a>(
         claim: &Claim,
         asset_data: &ClaimAssetData<'a>,
         is_provenance: bool,
+        redacted_assertions: &mut Vec<String>,
         verified: Result<ValidationInfo>,
         validation_log: &mut impl StatusTracker,
     ) -> Result<()> {
@@ -929,7 +941,7 @@ impl Claim {
             }
         };
 
-        // check for self redacted assertions and illegal redactions
+        // check for self redacted assertions and illegal redactions in this manifest
         if let Some(redactions) = claim.redactions() {
             for r in redactions {
                 let r_manifest = jumbf::labels::manifest_label_from_uri(r)
@@ -958,13 +970,74 @@ impl Claim {
             }
         }
 
-
         // verify assertion structure comparing hashes from assertion list to contents of assertion store
+        let current_manifest = claim.label();
         for assertion in claim.assertions() {
             let (label, instance) = Claim::assertion_label_from_link(&assertion.url());
+            let assertion_manifest = if uri_is_relative(&assertion.url()) {
+                current_manifest.to_string()
+            } else {
+                manifest_label_from_uri(&assertion.url()).ok_or(Error::AssertionMissing {
+                    url: assertion.url(),
+                })?
+            };
+            let assertion_label =
+                assertion_label_from_uri(&assertion.url()).ok_or(Error::AssertionMissing {
+                    url: assertion.url(),
+                })?;
 
-            // make sure UpdateManifests do not contain actions
-            if claim.update_manifest() && label.contains(assertions::labels::ACTIONS) {
+            // assertion URIs must reference the current manifest
+            if assertion_manifest != current_manifest {
+                let log_item = log_item!(
+                    assertion.url(),
+                    format!(
+                        "assertion uri must reference current manifest: {}",
+                        assertion.url()
+                    ),
+                    "verify_internal"
+                )
+                .error(Error::AssertionMissing {
+                    url: assertion.url(),
+                })
+                .validation_status(validation_status::ASSERTION_MISSING);
+                validation_log.log(
+                    log_item,
+                    Some(Error::AssertionMissing {
+                        url: assertion.url(),
+                    }),
+                )?;
+            }
+
+            // is this assertion in the incoming redaction list
+            match redacted_assertions
+                .iter()
+                .find(|r| r.contains(&assertion_manifest) && r.contains(&assertion_label))
+            {
+                Some(rp) => {
+                    if rp.contains(assertions::labels::ACTIONS) {
+                        let log_item = log_item!(
+                            assertion.url(),
+                            format!(
+                                "Redaction cannot contain ACTION assertion: {}",
+                                assertion.url()
+                            ),
+                            "verify_internal"
+                        )
+                        .error(Error::ClaimDisallowedRedaction)
+                        .validation_status(validation_status::ACTION_ASSERTION_REDACTED);
+                        validation_log.log(log_item, Some(Error::ClaimDisallowedRedaction))?;
+                    }
+
+                    continue; // in readated list so skip any additional checks
+                }
+                None => (),
+            }
+
+            // make sure UpdateManifests do not contain actions or thumbnail
+            if claim.update_manifest()
+                && (label.contains(assertions::labels::ACTIONS)
+                    || get_thumbnail_type(&label).contains("thumbnail"))
+            {
                 let log_item = log_item!(
                     claim.uri(),
                     "update manifests cannot contain actions",
@@ -975,6 +1048,7 @@ impl Claim {
                 validation_log.log(log_item, Some(Error::UpdateManifestInvalid))?;
             }
 
+            // verify the assertion data
             match claim.get_claim_assertion(&label, instance) {
                 // get the assertion if label and hash match
                 Some(ca) => {
@@ -1591,7 +1665,7 @@ impl Claim {
         self.get_claim_assertion(&l, i).map(|a| a.hash().to_vec())
     }
 
-    /// Returns how many assertions of this assertion type exist?
+    /// returns how many assertions of this assertion type exist?
     pub fn count_instances(&self, in_label: &str) -> usize {
         let (l, i) = Claim::assertion_label_from_link(in_label);
         let label = Claim::label_with_instance(&l, i);
@@ -1599,6 +1673,14 @@ impl Claim {
             .iter()
             .filter(|assertion| assertion.url().contains(&label))
             .count()
+    }
+
+    /// returns assertions that match label root
+    pub fn get_assertions_by_root_label(&self, in_label: &str) -> Vec<&ClaimAssertion> {
+        self.claim_assertion_store()
+            .iter()
+            .filter(|ca| ca.label_raw() == in_label)
+            .collect()
     }
 
     // Get the next highest instance label
