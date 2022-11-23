@@ -145,6 +145,10 @@ impl Store {
         &self.trust_handler
     }
 
+    fn trust_handler_mut(&mut self) -> &mut TrustHandler {
+        &mut self.trust_handler
+    }
+
     /// Get the provenance if available.
     /// If loaded from an existing asset it will be provenance from the last claim.
     /// If a new claim is committed that will be the provenance claim
@@ -2045,6 +2049,10 @@ impl Store {
         asset_path: &'a Path,
         validation_log: &mut impl StatusTracker,
     ) -> Result<()> {
+        // initialize trust store if no trust store is set
+        if self.trust_handler().is_empty() {
+            self.trust_handler_mut().load_default_trust()?;
+        }
         Store::verify_store(self, &ClaimAssetData::PathData(asset_path), validation_log)
     }
 
@@ -2055,6 +2063,10 @@ impl Store {
         _asset_type: &str,
         validation_log: &mut impl StatusTracker,
     ) -> Result<()> {
+        // initialize trust store if no trust store is set
+        if self.trust_handler().is_empty() {
+            self.trust_handler_mut().load_default_trust()?;
+        }
         Store::verify_store(self, &ClaimAssetData::ByteData(buf), validation_log)
     }
 
@@ -2285,7 +2297,12 @@ impl Store {
         verify: bool,
         validation_log: &mut impl StatusTracker,
     ) -> Result<Store> {
-        Store::get_store_from_memory(asset_type, data, validation_log).and_then(|store| {
+        Store::get_store_from_memory(asset_type, data, validation_log).and_then(|mut store| {
+            // initialize trust store if no trust store is set
+            if store.trust_handler().is_empty() {
+                store.trust_handler_mut().load_default_trust()?;
+            }
+            
             // verify the store
             if verify {
                 // verify store and claims

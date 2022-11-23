@@ -94,62 +94,55 @@ pub fn get_ocsp_response(certs: &[Vec<u8>]) -> Option<OcspData> {
             let request_str = format!("{}/{}", url.path(), base64::encode(ocsp_req.to_der().ok()?));
             url.set_path(&request_str);
 
-            let request = ureq::builder().redirects(5).build().get(&url.as_str());
+            let request = ureq::builder().redirects(5).build().get(url.as_str());
             let response = if let Some(host) = url.host() {
                 request.set("Host", &host.to_string()).call() // for responders that don't support http 1.0
             } else {
                 request.call()
             };
 
-            match response {
-                Ok(r) => {
-                    if r.status() == 200 {
-                        let len = r
-                            .header("Content-Length")
-                            .and_then(|s| s.parse::<usize>().ok())
-                            .unwrap_or(2000);
+            if let Ok(r) = response {
+                if r.status() == 200 {
+                    let len = r
+                        .header("Content-Length")
+                        .and_then(|s| s.parse::<usize>().ok())
+                        .unwrap_or(2000);
 
-                        let mut ocsp_rsp: Vec<u8> = Vec::with_capacity(len);
+                    let mut ocsp_rsp: Vec<u8> = Vec::with_capacity(len);
 
-                        r.into_reader()
-                            .take(1000000)
-                            .read_to_end(&mut ocsp_rsp)
-                            .ok()?;
+                    r.into_reader()
+                        .take(1000000)
+                        .read_to_end(&mut ocsp_rsp)
+                        .ok()?;
 
-                        // sanity check response
-                        let ocsp_response = ocsp::OcspResponse::from_der(&ocsp_rsp).ok()?;
-                        if ocsp_response.status() == ocsp::OcspResponseStatus::SUCCESSFUL {
-                            if let Ok(basic_response) = ocsp_response.basic() {
-                                if let Some(cert_status) =
-                                    get_end_entity_cert_status(certs, &basic_response)
+                    // sanity check response
+                    let ocsp_response = ocsp::OcspResponse::from_der(&ocsp_rsp).ok()?;
+                    if ocsp_response.status() == ocsp::OcspResponseStatus::SUCCESSFUL {
+                        if let Ok(basic_response) = ocsp_response.basic() {
+                            if let Some(cert_status) =
+                                get_end_entity_cert_status(certs, &basic_response)
+                            {
+                                if cert_status.status == OcspCertStatus::GOOD
+                                    || cert_status.status == OcspCertStatus::REVOKED
+                                        && cert_status.reason == OcspRevokedStatus::REMOVE_FROM_CRL
                                 {
-                                    if cert_status.status == OcspCertStatus::GOOD
-                                        || cert_status.status == OcspCertStatus::REVOKED
-                                            && cert_status.reason
-                                                == OcspRevokedStatus::REMOVE_FROM_CRL
-                                    {
-                                        let next_update = NaiveDateTime::parse_from_str(
-                                            &cert_status.next_update.to_string(),
-                                            DATE_FMT,
-                                        )
-                                        .ok()?;
+                                    let next_update = NaiveDateTime::parse_from_str(
+                                        &cert_status.next_update.to_string(),
+                                        DATE_FMT,
+                                    )
+                                    .ok()?;
 
-                                        let output = OcspData {
-                                            ocsp_der: ocsp_rsp,
-                                            next_update: DateTime::from_utc(
-                                                next_update,
-                                                chrono::Utc,
-                                            ),
-                                        };
+                                    let output = OcspData {
+                                        ocsp_der: ocsp_rsp,
+                                        next_update: DateTime::from_utc(next_update, chrono::Utc),
+                                    };
 
-                                        return Some(output);
-                                    }
+                                    return Some(output);
                                 }
                             }
                         }
                     }
                 }
-                Err(_) => (),
             }
         }
     }

@@ -803,7 +803,7 @@ impl Claim {
         claim: &Claim,
         asset_bytes: &'a [u8],
         is_provenance: bool,
-        active_redactions: &mut Vec<String>,
+        active_redactions: &mut [String],
         validation_log: &mut impl StatusTracker,
     ) -> Result<()> {
         // Parse COSE signed data (signature) and validate it.
@@ -857,7 +857,7 @@ impl Claim {
         claim: &Claim,
         asset_data: &ClaimAssetData<'a>,
         is_provenance: bool,
-        active_redactions: &mut Vec<String>,
+        active_redactions: &mut [String],
         trust_handler: &TrustHandler,
         validation_log: &mut impl StatusTracker,
     ) -> Result<()> {
@@ -910,7 +910,7 @@ impl Claim {
         claim: &Claim,
         asset_data: &ClaimAssetData<'a>,
         is_provenance: bool,
-        redacted_assertions: &mut Vec<String>,
+        redacted_assertions: &mut [String],
         verified: Result<ValidationInfo>,
         validation_log: &mut impl StatusTracker,
     ) -> Result<()> {

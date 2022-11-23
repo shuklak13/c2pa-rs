@@ -32,7 +32,7 @@ fn load_trust(trust_path: &Path) -> Result<Vec<openssl::x509::X509>> {
 }
 
 fn load_trust_from_data(trust_data: &[u8]) -> Result<Vec<openssl::x509::X509>> {
-    openssl::x509::X509::stack_from_pem(&trust_data).map_err(wrap_openssl_err)
+    openssl::x509::X509::stack_from_pem(trust_data).map_err(wrap_openssl_err)
 }
 
 // Struct to handle verification of trust chains
@@ -55,28 +55,31 @@ impl std::fmt::Debug for TrustHandler {
 #[allow(dead_code)]
 impl TrustHandler {
     pub fn new() -> Self {
-        // load default trust anchors
-        let ts = include_bytes!("../../tests/fixtures/certs/cacert-2022-10-11.pem");
-
-        let mut th = TrustHandler {
+        TrustHandler {
             trust_anchors: Vec::new(),
             private_anchors: Vec::new(),
             trust_store: None,
-        };
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.trust_store.is_none()
+    }
+    pub fn load_default_trust(&mut self) -> Result<()> {
+        // load default trust anchors
+        let ts = include_bytes!("../../tests/fixtures/certs/cacert-2022-10-11.pem");
 
         // load the trust store
-        th.load_trust_anchors_from_data(ts)
-            .expect("Could not find default trust anchors");
+        self.load_trust_anchors_from_data(ts)?;
 
         // load debug/test private trust anchors
         #[cfg(test)]
         {
             let pa = include_bytes!("../../tests/fixtures/certs/test_cert_root_bundle.pem");
-            th.append_private_trust_data(pa)
-                .expect("Could not find test trust anchors");
+            self.append_private_trust_data(pa)?;
         }
 
-        th
+        Ok(())
     }
 
     // add trust anchors
@@ -132,10 +135,10 @@ impl TrustHandler {
 
     // verify certificate and trust chain
     pub fn verify_trust(&self, chain_der: &[Vec<u8>], cert_der: &[u8]) -> Result<bool> {
-        let mut cert_chain = openssl::stack::Stack::new().unwrap();
-        let mut store_ctx = openssl::x509::X509StoreContext::new().unwrap();
+        let mut cert_chain = openssl::stack::Stack::new().map_err(wrap_openssl_err)?;
+        let mut store_ctx = openssl::x509::X509StoreContext::new().map_err(wrap_openssl_err)?;
 
-        let chain = certs_der_to_x509(chain_der).unwrap();
+        let chain = certs_der_to_x509(chain_der)?;
         let cert = openssl::x509::X509::from_der(cert_der).map_err(wrap_openssl_err)?;
 
         if let Some(store) = &self.trust_store {
@@ -155,6 +158,10 @@ impl TrustHandler {
 
 #[cfg(test)]
 pub mod tests {
+    #![allow(clippy::expect_used)]
+    #![allow(clippy::panic)]
+    #![allow(clippy::unwrap_used)]
+
     use super::*;
     use crate::{
         openssl::temp_signer::{self},
@@ -166,7 +173,9 @@ pub mod tests {
     fn test_trust_store() {
         let cert_dir = crate::utils::test::fixture_path("certs");
 
-        let th = TrustHandler::new();
+        let mut th = TrustHandler::new();
+
+        th.load_default_trust().unwrap();
 
         // test all the certs
         let (ps256, _) = temp_signer::get_rsa_signer(&cert_dir, SigningAlg::Ps256, None);
@@ -185,35 +194,15 @@ pub mod tests {
         let es512_certs = es512.certs().unwrap();
         let ed25519_certs = ed25519.certs().unwrap();
 
-        assert_eq!(
-            th.verify_trust(&ps256_certs[1..], &ps256_certs[0]).unwrap(),
-            true
-        );
-        assert_eq!(
-            th.verify_trust(&ps384_certs[1..], &ps384_certs[0]).unwrap(),
-            true
-        );
-        assert_eq!(
-            th.verify_trust(&ps512_certs[1..], &ps512_certs[0]).unwrap(),
-            true
-        );
-        assert_eq!(
-            th.verify_trust(&es256_certs[1..], &es256_certs[0]).unwrap(),
-            true
-        );
-        assert_eq!(
-            th.verify_trust(&es384_certs[1..], &es384_certs[0]).unwrap(),
-            true
-        );
-        assert_eq!(
-            th.verify_trust(&es512_certs[1..], &es512_certs[0]).unwrap(),
-            true
-        );
-        assert_eq!(
-            th.verify_trust(&ed25519_certs[1..], &ed25519_certs[0])
-                .unwrap(),
-            true
-        );
+        assert!(th.verify_trust(&ps256_certs[1..], &ps256_certs[0]).unwrap());
+        assert!(th.verify_trust(&ps384_certs[1..], &ps384_certs[0]).unwrap());
+        assert!(th.verify_trust(&ps512_certs[1..], &ps512_certs[0]).unwrap());
+        assert!(th.verify_trust(&es256_certs[1..], &es256_certs[0]).unwrap());
+        assert!(th.verify_trust(&es384_certs[1..], &es384_certs[0]).unwrap());
+        assert!(th.verify_trust(&es512_certs[1..], &es512_certs[0]).unwrap());
+        assert!(th
+            .verify_trust(&ed25519_certs[1..], &ed25519_certs[0])
+            .unwrap());
     }
 
     #[test]
@@ -222,9 +211,6 @@ pub mod tests {
         let ta = fixture_path("certs/test_cert_root_bundle.pem");
 
         let mut th = TrustHandler::new();
-
-        // clear defaults since I want to manage the trust list
-        th.clear();
 
         // load the trust store
         th.load_trust_anchors(&ta).unwrap();
@@ -246,34 +232,14 @@ pub mod tests {
         let es512_certs = es512.certs().unwrap();
         let ed25519_certs = ed25519.certs().unwrap();
 
-        assert_eq!(
-            th.verify_trust(&ps256_certs[2..], &ps256_certs[0]).unwrap(),
-            false
-        );
-        assert_eq!(
-            th.verify_trust(&ps384_certs[2..], &ps384_certs[0]).unwrap(),
-            false
-        );
-        assert_eq!(
-            th.verify_trust(&ps512_certs[2..], &ps512_certs[0]).unwrap(),
-            false
-        );
-        assert_eq!(
-            th.verify_trust(&es256_certs[2..], &es256_certs[0]).unwrap(),
-            false
-        );
-        assert_eq!(
-            th.verify_trust(&es384_certs[2..], &es384_certs[0]).unwrap(),
-            false
-        );
-        assert_eq!(
-            th.verify_trust(&es512_certs[2..], &es512_certs[0]).unwrap(),
-            false
-        );
-        assert_eq!(
-            th.verify_trust(&ed25519_certs[2..], &ed25519_certs[0])
-                .unwrap(),
-            false
-        );
+        assert!(!th.verify_trust(&ps256_certs[2..], &ps256_certs[0]).unwrap());
+        assert!(!th.verify_trust(&ps384_certs[2..], &ps384_certs[0]).unwrap());
+        assert!(!th.verify_trust(&ps512_certs[2..], &ps512_certs[0]).unwrap());
+        assert!(!th.verify_trust(&es256_certs[2..], &es256_certs[0]).unwrap());
+        assert!(!th.verify_trust(&es384_certs[2..], &es384_certs[0]).unwrap());
+        assert!(!th.verify_trust(&es512_certs[2..], &es512_certs[0]).unwrap());
+        assert!(!th
+            .verify_trust(&ed25519_certs[2..], &ed25519_certs[0])
+            .unwrap());
     }
 }
