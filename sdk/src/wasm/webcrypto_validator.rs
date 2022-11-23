@@ -135,6 +135,19 @@ fn pss_padding_from_hash(hash: &str, salt_len: &u32) -> Result<PaddingScheme> {
     }
 }
 
+// use C2PA names for the hash types
+fn map_wc_hash_to_c2p_hash(in_hash: &str) -> Result<String> {
+    match in_hash {
+        "SHA-256" => Ok("sha256".to_owned()),
+        "SHA-384" => Ok("sha384".to_owned()),
+        "SHA-512" => Ok("sha512".to_owned()),
+        _ => Err(Error::WasmRsaKeyImport(format!(
+            "Unsupported hashing algorithm: {}",
+            in_hash
+        ))),
+    }
+}
+
 async fn async_validate(
     algo: String,
     hash: String,
@@ -154,7 +167,7 @@ async fn async_validate(
                 .map_err(|err| Error::WasmRsaKeyImport(err.to_string()))?;
             let (_, seq) = parse_ber_sequence(spki.subject_public_key)
                 .map_err(|err| Error::WasmRsaKeyImport(err.to_string()))?;
-            let hashed_data = hash_by_alg(&hash, &data, None);
+            let hashed_data = hash_by_alg(&map_wc_hash_to_c2p_hash(&hash)?, &data, None);
             let modulus = biguint_val(&seq[0]);
             let exp = biguint_val(&seq[1]);
             let public_key = RsaPublicKey::new(modulus, exp)

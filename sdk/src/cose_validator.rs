@@ -566,71 +566,6 @@ fn get_sign_certs(sign1: &coset::CoseSign1) -> Result<Vec<Vec<u8>>> {
     }
 }
 
-// internal util function to dump the cert chain in PEM format
-#[cfg(not(target_arch = "wasm32"))]
-#[cfg(feature = "file_io")]
-#[allow(dead_code)]
-fn dump_cert_chain(certs: &[Vec<u8>], output_path: &std::path::Path) -> Result<()> {
-    let mut out_buf: Vec<u8> = Vec::new();
-
-    for der_bytes in certs {
-        let c = openssl::x509::X509::from_der(der_bytes).map_err(|_e| Error::UnsupportedType)?;
-        let mut c_pem = c.to_pem().map_err(|_e| Error::UnsupportedType)?;
-
-        out_buf.append(&mut c_pem);
-    }
-
-    std::fs::write(output_path, &out_buf).map_err(Error::IoError)
-}
-
-fn load_trust(trust_path: &str) -> Result<Vec<openssl::x509::X509>> {
-    let trust_pems = std::fs::read(trust_path)?;
-    openssl::x509::X509::stack_from_pem(&trust_pems).map_err(|_e| Error::CoseTimeStampGeneration)
-}
-fn certs_der_to_x509(ders: &[Vec<u8>]) -> Result<Vec<openssl::x509::X509>> {
-    let mut certs: Vec<openssl::x509::X509> = Vec::new();
-
-    for d in ders {
-        let cert = openssl::x509::X509::from_der(d).map_err(|_e| Error::CoseTimeStampGeneration)?;
-        certs.push(cert);
-    }
-
-    Ok(certs)
-}
-
-pub fn verify_trust(
-    trust: &[openssl::x509::X509],
-    chain_der: &[Vec<u8>],
-    cert_der: &[u8],
-) -> Result<bool> {
-    let mut builder = openssl::x509::store::X509StoreBuilder::new().unwrap();
-    let mut cert_chain = openssl::stack::Stack::new().unwrap();
-    let mut store_ctx = openssl::x509::X509StoreContext::new().unwrap();
-
-    let chain = certs_der_to_x509(chain_der).unwrap();
-    let cert =
-        openssl::x509::X509::from_der(cert_der).map_err(|_e| Error::CoseTimeStampGeneration)?;
-
-    // add trust anchors
-    for t in trust {
-        let _ = builder.add_cert(t.clone());
-    }
-    let store = builder.build();
-
-    for c in chain {
-        cert_chain
-            .push(c)
-            .map_err(|_e| Error::CoseTimeStampGeneration)?;
-    }
-
-    match store_ctx.init(store.as_ref(), cert.as_ref(), &cert_chain, |f| {
-        f.verify_cert()
-    }) {
-        Ok(trust) => Ok(trust),
-        Err(_) => Ok(false),
-    }
-}
-
 // Note: this function is only used to get the display string and not for cert validation.
 fn get_signing_time(
     sign1: &coset::CoseSign1,
@@ -824,11 +759,12 @@ pub fn get_signing_info(
 /// addition_data: additional optional data that may have been used during signing
 /// returns - Ok on success
 #[cfg(not(target_arch = "wasm32"))]
-pub fn verify_cose(
+pub(crate) fn verify_cose(
     cose_bytes: &[u8],
     data: &[u8],
     additional_data: &[u8],
     signature_only: bool,
+    th_opt: Option<&crate::openssl::TrustHandler>,
     validation_log: &mut impl StatusTracker,
 ) -> Result<ValidationInfo> {
     let sign1 = get_cose_sign1(cose_bytes, data, validation_log)?;
@@ -860,31 +796,6 @@ pub fn verify_cose(
 
     // get the public key der
     let der_bytes = &certs[0];
-
-    let trust_pems = load_trust("/Users/mfisher/Downloads/cacert-2022-10-11.pem")?;
-
-    match verify_trust(&trust_pems, &certs[1..], der_bytes) {
-        Ok(trusted) => {
-            if trusted {
-                let log_item =
-                    log_item!("Cose_Sign1", "signing certificate trusted", "verify_cose")
-                        .validation_status(validation_status::SIGNING_CREDENTIAL_TRUSTED);
-                validation_log.log_silent(log_item);
-            } else {
-                let log_item =
-                    log_item!("Cose_Sign1", "signing certificate untrusted", "verify_cose")
-                        .error(Error::CoseCertUntrusted)
-                        .validation_status(validation_status::SIGNING_CREDENTIAL_UNTRUSTED);
-                validation_log.log(log_item, Some(Error::CoseCertUntrusted))?;
-            }
-        }
-        Err(_) => {
-            let log_item = log_item!("Cose_Sign1", "signing certificate untrusted", "verify_cose")
-                .error(Error::CoseCertUntrusted)
-                .validation_status(validation_status::SIGNING_CREDENTIAL_UNTRUSTED);
-            validation_log.log(log_item, Some(Error::CoseCertUntrusted))?;
-        }
-    }
 
     if !signature_only {
         // verify certs
@@ -924,6 +835,33 @@ pub fn verify_cose(
         }
     }
 
+    if let Some(th) = th_opt {
+        // is the certificate trusted
+        match th.verify_trust(&certs[1..], der_bytes) {
+            Ok(trusted) => {
+                if trusted {
+                    let log_item =
+                        log_item!("Cose_Sign1", "signing certificate trusted", "verify_cose")
+                            .validation_status(validation_status::SIGNING_CREDENTIAL_TRUSTED);
+                    validation_log.log_silent(log_item);
+                } else {
+                    let log_item =
+                        log_item!("Cose_Sign1", "signing certificate untrusted", "verify_cose")
+                            .error(Error::CoseCertUntrusted)
+                            .validation_status(validation_status::SIGNING_CREDENTIAL_UNTRUSTED);
+                    validation_log.log(log_item, Some(Error::CoseCertUntrusted))?;
+                }
+            }
+            Err(_) => {
+                let log_item =
+                    log_item!("Cose_Sign1", "signing certificate untrusted", "verify_cose")
+                        .error(Error::CoseCertUntrusted)
+                        .validation_status(validation_status::SIGNING_CREDENTIAL_UNTRUSTED);
+                validation_log.log(log_item, Some(Error::CoseCertUntrusted))?;
+            }
+        }
+    }
+
     // Check the signature, which needs to have the same `additional_data` provided, by
     // providing a closure that can do the verify operation.
     sign1.verify_signature(additional_data, |sig, verify_data| -> Result<()> {
@@ -943,13 +881,16 @@ pub fn verify_cose(
 }
 
 #[cfg(target_arch = "wasm32")]
-pub fn verify_cose(
+pub(crate) fn verify_cose(
     _cose_bytes: &[u8],
     _data: &[u8],
     _additional_data: &[u8],
     _signature_only: bool,
+    _th: Option<&crate::openssl::TrustHandler>,
     _validation_log: &mut impl StatusTracker,
 ) -> Result<ValidationInfo> {
+    use crate::openssl::TrustHandler;
+
     Err(Error::CoseVerifier)
 }
 

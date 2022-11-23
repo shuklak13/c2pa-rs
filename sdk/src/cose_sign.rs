@@ -55,7 +55,7 @@ pub fn sign_claim(claim_bytes: &[u8], signer: &dyn Signer, box_size: usize) -> R
         // Sanity check: Ensure that this signature is valid.
         let mut cose_log = OneShotStatusTracker::new();
 
-        match verify_cose(&sig, claim_bytes, b"", false, &mut cose_log) {
+        match verify_cose(&sig, claim_bytes, b"", false, None, &mut cose_log) {
             Ok(r) => {
                 if !r.validated {
                     Err(Error::CoseSignature)

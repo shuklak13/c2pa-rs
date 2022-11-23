@@ -35,11 +35,16 @@ pub(crate) mod temp_signer;
 #[cfg(test)]
 pub(crate) mod temp_signer_async;
 
+mod trust_handler;
+pub(crate) use trust_handler::TrustHandler;
+
 use openssl::x509::X509;
 #[cfg(test)]
 #[allow(unused_imports)]
 #[cfg(feature = "async_signer")]
 pub(crate) use temp_signer_async::AsyncSignerAdapter;
+
+use crate::{Error, Result};
 
 pub(crate) fn check_chain_order(certs: &[X509]) -> bool {
     if certs.len() > 1 {
@@ -73,4 +78,19 @@ pub(crate) fn check_chain_order_der(cert_ders: &[Vec<u8>]) -> bool {
     }
 
     check_chain_order(&certs)
+}
+
+// internal util function to dump the cert chain in PEM format
+#[allow(dead_code)]
+pub(crate) fn dump_cert_chain(certs: &[Vec<u8>], output_path: &std::path::Path) -> Result<()> {
+    let mut out_buf: Vec<u8> = Vec::new();
+
+    for der_bytes in certs {
+        let c = openssl::x509::X509::from_der(der_bytes).map_err(|_e| Error::UnsupportedType)?;
+        let mut c_pem = c.to_pem().map_err(|_e| Error::UnsupportedType)?;
+
+        out_buf.append(&mut c_pem);
+    }
+
+    std::fs::write(output_path, &out_buf).map_err(Error::IoError)
 }

@@ -46,6 +46,7 @@ use crate::{
     hash_utils::{hash_by_alg, vec_compare, verify_by_alg},
     jumbf::{self, boxes::*},
     jumbf_io::load_jumbf_from_memory,
+    openssl::TrustHandler,
     status_tracker::{log_item, OneShotStatusTracker, StatusTracker},
     validation_status, ManifestStoreReport,
 };
@@ -64,12 +65,13 @@ const MANIFEST_STORE_EXT: &str = "c2pa"; // file extension for external manifest
 /// A `Store` maintains a list of `Claim` structs.
 ///
 /// Typically, this list of `Claim`s represents all of the claims in an asset.
-#[derive(Debug, PartialEq)]
+#[derive(Debug)]
 pub struct Store {
     claims_map: HashMap<String, usize>,
     claims: Vec<Claim>,
     label: String,
     provenance_path: Option<String>,
+    trust_handler: TrustHandler,
 }
 
 struct ManifestInfo<'a> {
@@ -112,12 +114,35 @@ impl Store {
             claims: Vec::new(),
             label: label.to_string(),
             provenance_path: None,
+            trust_handler: TrustHandler::new(),
         }
     }
 
     /// Return label for the store
     pub fn label(&self) -> &str {
         &self.label
+    }
+
+    /// Load set of trust anchors used for certificate validation. Path to the
+    /// trust anchors is passed in the trust_path variable.
+    pub fn add_trust_anchor<P: AsRef<Path>>(&mut self, trust_path: P) -> Result<()> {
+        self.trust_handler.load_trust_anchors(trust_path)
+    }
+
+    // Load set of private trust anchors used for certificate validation. Path to the
+    /// private trust anchors is passed in the trust_path variable.  This can be called multiple times
+    /// if there are additional trust stores.
+    pub fn add_private_trust_anchor<P: AsRef<Path>>(&mut self, trust_path: P) -> Result<()> {
+        self.trust_handler.append_private_trust(trust_path)
+    }
+
+    /// Clear all existing trust anchors
+    pub fn clear_trust_anchors(&mut self) {
+        self.trust_handler.clear();
+    }
+
+    fn trust_handler(&self) -> &TrustHandler {
+        &self.trust_handler
     }
 
     /// Get the provenance if available.
@@ -350,7 +375,14 @@ impl Store {
             // Sanity check: Ensure that this signature is valid.
 
             let mut cose_log = OneShotStatusTracker::new();
-            match verify_cose(&sig, &claim_bytes, b"", false, &mut cose_log) {
+            match verify_cose(
+                &sig,
+                &claim_bytes,
+                b"",
+                false,
+                None, // no need to check trust anchors here
+                &mut cose_log,
+            ) {
                 Ok(_) => Ok(sig),
                 Err(err) => {
                     error!(
@@ -1066,6 +1098,7 @@ impl Store {
                         asset_data,
                         false,
                         active_redactions,
+                        store.trust_handler(),
                         validation_log,
                     )?;
 
@@ -1317,6 +1350,7 @@ impl Store {
             asset_data,
             true,
             &mut active_redactions,
+            store.trust_handler(),
             validation_log,
         )?;
 

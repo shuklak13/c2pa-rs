@@ -34,6 +34,7 @@ use crate::{
         },
         labels::{assertion_label_from_uri, manifest_label_from_uri, uri_is_relative},
     },
+    openssl::TrustHandler,
     salt::{SaltGenerator, NO_SALT},
     status_tracker::{log_item, OneShotStatusTracker, StatusTracker},
     utils::hash_utils::{hash_by_alg, vec_compare, verify_by_alg},
@@ -798,7 +799,7 @@ impl Claim {
     /// Verify claim signature, assertion store and asset hashes
     /// claim - claim to be verified
     /// asset_bytes - reference to bytes of the asset
-    pub async fn verify_claim_async<'a>(
+    pub(crate) async fn verify_claim_async<'a>(
         claim: &Claim,
         asset_bytes: &'a [u8],
         is_provenance: bool,
@@ -852,11 +853,12 @@ impl Claim {
     /// Verify claim signature, assertion store and asset hashes
     /// claim - claim to be verified
     /// asset_bytes - reference to bytes of the asset
-    pub fn verify_claim<'a>(
+    pub(crate) fn verify_claim<'a>(
         claim: &Claim,
         asset_data: &ClaimAssetData<'a>,
         is_provenance: bool,
         active_redactions: &mut Vec<String>,
+        trust_handler: &TrustHandler,
         validation_log: &mut impl StatusTracker,
     ) -> Result<()> {
         // Parse COSE signed data (signature) and validate it.
@@ -885,7 +887,14 @@ impl Claim {
             return Err(Error::ClaimDecoding);
         };
 
-        let verified = verify_cose(sig, data, &additional_bytes, !is_provenance, validation_log);
+        let verified = verify_cose(
+            sig,
+            data,
+            &additional_bytes,
+            !is_provenance,
+            Some(trust_handler),
+            validation_log,
+        );
 
         Claim::verify_internal(
             claim,
