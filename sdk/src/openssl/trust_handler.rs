@@ -67,7 +67,7 @@ impl TrustHandler {
     }
     pub fn load_default_trust(&mut self) -> Result<()> {
         // load default trust anchors
-        let ts = include_bytes!("../../tests/fixtures/certs/cacert-2022-10-11.pem");
+        let ts = include_bytes!("../../tests/fixtures/certs/trust_anchors.pem");
 
         // load the trust store
         self.load_trust_anchors_from_data(ts)?;
