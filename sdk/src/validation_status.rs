@@ -99,7 +99,7 @@ impl ValidationStatus {
             e if e.starts_with("AssertionDecoding") => STATUS_ASSERTION_MALFORMED, // todo: no code for invalid assertion format
             e if e.starts_with("HashMismatch") => ASSERTION_DATAHASH_MATCH,
             e if e.starts_with("PrereleaseError") => STATUS_PRERELEASE,
-            _ => STATUS_OTHER,
+            _ => GENERAL_ERROR,
         }
     }
 
@@ -108,10 +108,17 @@ impl ValidationStatus {
         match error {
             Error::ClaimMissing { .. } => CLAIM_MISSING,
             Error::AssertionMissing { .. } => ASSERTION_MISSING,
-            Error::AssertionDecoding(_code) => STATUS_ASSERTION_MALFORMED, // todo: no code for invalid assertion format
+            Error::AssertionDecoding(code) if code.content_type == "application/json" => {
+                ASSERTION_JSON_INVALID
+            }
+            Error::AssertionDecoding(code) if code.content_type == "application/cbor" => {
+                ASSERTION_CBOR_INVALID
+            }
+            Error::AssertionDecoding(_) => ASSERTION_REQUIRED_MISSING, // use this as a default assertion Decoding case for now
             Error::HashMismatch(_) => ASSERTION_DATAHASH_MATCH,
             Error::PrereleaseError => STATUS_PRERELEASE,
-            _ => STATUS_OTHER,
+            Error::RemoteManifestFetch(_) => MANIFEST_INACCESSIBLE,
+            _ => GENERAL_ERROR,
         }
     }
 
@@ -365,6 +372,23 @@ pub const ASSERTION_INACCESSIBLE: &str = "assertion.inaccessible";
 /// `ValidationStatus.url()` will point to a C2PA assertion.
 pub const ASSERTION_NOT_REDACTED: &str = "assertion.notRedacted";
 
+/// A required field is not present in an assertion.
+///
+pub const ASSERTION_REQUIRED_MISSING: &str = "assertion.required.missing";
+
+/// The JSON(-LD) of an assertion is not valid.
+///
+pub const ASSERTION_JSON_INVALID: &str = "assertion.json.invalid";
+
+/// The CBOR of an assertion is not valid.
+///
+pub const ASSERTION_CBOR_INVALID: &str = "assertion.cbor.invalid";
+
+/// An action that requires an associated ingredient either does not have one
+/// or the one specified cannot be located
+///
+pub const ASSERTION_ACTION_INGREDIENT_MISMATCH: &str = "assertion.action.ingredientMismatch";
+
 /// An assertion was declared as redacted by its own claim.
 ///
 /// `ValidationStatus.url()` will point to a C2PA claim box.
@@ -391,13 +415,13 @@ pub const ASSERTION_BMFFHASH_MISMATCH: &str = "assertion.bmffHash.mismatch";
 /// A hard binding assertion is in a cloud data assertion.
 ///
 /// `ValidationStatus.url()` will point to a C2PA assertion.
-pub const ASSERTION_CLOUDDATA_HARD_BINDING: &str = "assertion.clouddata.hardBinding";
+pub const ASSERTION_CLOUD_DATA_HARD_BINDING: &str = "assertion.cloud-data.hardBinding";
 
 /// An update manifest contains a cloud data assertion referencing
 /// an actions assertion.
 ///
 /// `ValidationStatus.url()` will point to a C2PA assertion.
-pub const ASSERTION_CLOUDDATA_ACTIONS: &str = "assertion.clouddata.actions";
+pub const ASSERTION_CLOUD_DATA_ACTIONS: &str = "assertion.cloud-data.actions";
 
 /// The value of an `alg` header, or other header that specifies an
 /// algorithm used to compute the value of another field, is unknown
@@ -406,11 +430,14 @@ pub const ASSERTION_CLOUDDATA_ACTIONS: &str = "assertion.clouddata.actions";
 /// `ValidationStatus.url()` will point to a C2PA claim box or C2PA assertion.
 pub const ALGORITHM_UNSUPPORTED: &str = "algorithm.unsupported";
 
-// -- unofficial status codes --
+/// A value to be used when there was an error not specifically listed here.
+///
+pub const GENERAL_ERROR: &str = "general.error";
 
-pub(crate) const STATUS_OTHER: &str = "com.adobe.other";
+// -- unofficial status codes --
 pub(crate) const STATUS_PRERELEASE: &str = "com.adobe.prerelease";
 pub(crate) const STATUS_ASSERTION_MALFORMED: &str = "com.adobe.assertion.malformed";
+pub(crate) const MANIFEST_INACCESSIBLE: &str = "com.adobe.manifest.inaccessible";
 
 /// Returns `true` if the status code is a known C2PA success status code.
 ///

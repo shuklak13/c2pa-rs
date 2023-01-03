@@ -950,4 +950,18 @@ mod tests_file_io {
         println!("ingredient = {}", ingredient);
         assert_eq!(ingredient.validation_status(), None);
     }
+
+    #[test]
+    #[cfg(feature = "file_io")]
+    fn test_cloud_manifest_fail() {
+        let ap = fixture_path("cloud-bad.jpg");
+        let ingredient = Ingredient::from_file(ap).expect("from_file");
+
+        println!("ingredient = {}", ingredient);
+        assert!(ingredient.validation_status().is_some());
+        assert_eq!(
+            ingredient.validation_status().unwrap()[0].code(),
+            validation_status::STATUS_PRERELEASE
+        );
+    }
 }
