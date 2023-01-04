@@ -472,15 +472,22 @@ impl Ingredient {
             | Err(Error::UnsupportedType) => {} // no claims but valid file
             Err(Error::BadParam(desc)) if desc == *"unrecognized file type" => {}
             Err(e) => {
-                // we can ignore the error here because it should have a log entry corresponding to it
-                debug!("ingredient {:?}", e);
+                // we can ignore most errors here because they should have a corresponding log entry
+                // that will be reported via validation_status
+                debug!("ingredient {:?}", &e);
                 // convert any other error to a validation status
-                let statuses: Vec<ValidationStatus> = validation_log
+                let mut statuses: Vec<ValidationStatus> = validation_log
                     .get_log()
                     .iter()
                     .filter_map(ValidationStatus::from_validation_item)
                     .filter(|s| !validation_status::is_success(s.code()))
                     .collect();
+
+                // Special handler for remote manifest fetch errors
+                // return ingredient but report the error in validationStatus
+                if let Error::RemoteManifestFetch(_err) = &e {
+                    statuses.push(ValidationStatus::from_error(&e));
+                }
                 ingredient.validation_status = if statuses.is_empty() {
                     None
                 } else {
@@ -953,6 +960,7 @@ mod tests_file_io {
 
     #[test]
     #[cfg(feature = "file_io")]
+    #[cfg(feature = "fetch_remote_manifests")]
     fn test_cloud_manifest_fail() {
         let ap = fixture_path("cloud-bad.jpg");
         let ingredient = Ingredient::from_file(ap).expect("from_file");
@@ -961,7 +969,7 @@ mod tests_file_io {
         assert!(ingredient.validation_status().is_some());
         assert_eq!(
             ingredient.validation_status().unwrap()[0].code(),
-            validation_status::STATUS_PRERELEASE
+            validation_status::MANIFEST_INACCESSIBLE
         );
     }
 }
