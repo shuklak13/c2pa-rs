@@ -1391,7 +1391,6 @@ pub(crate) mod tests {
         assert_eq!(thumb, vec![1, 2, 3]);
     }
 
-
     #[test]
     #[cfg(feature = "file_io")]
     fn manifest_embed_bad_assertion() {
@@ -1399,18 +1398,19 @@ pub(crate) mod tests {
         let output = temp_fixture_path(&temp_dir, TEST_SMALL_JPEG);
         let signer = temp_signer();
 
-
         let mut manifest = Manifest::new("test");
         // add an incorrect Actions assertion  - missing actions field
-        manifest.add_labeled_assertion("c2pa.actions", &serde_json::json!({})).expect("labeled_assertion");
+        manifest
+            .add_labeled_assertion("c2pa.actions", &serde_json::json!({}))
+            .expect("labeled_assertion");
         // sign the manifest
         let result = manifest.embed(&output, &output, &signer);
         println!("{:?}", result);
         assert!(result.is_err());
         // embed needs to read some assertions in order to modify them
         // so they will return Decoding rather than encoding errors
-        assert!(matches!(result,Err(Error::AssertionDecoding(_))));
-        let err_msg = format!("{:?}",result);
+        assert!(matches!(result, Err(Error::AssertionDecoding(_))));
+        let err_msg = format!("{:?}", result);
         assert!(err_msg.contains("c2pa.actions"));
         assert!(err_msg.contains("missing field `actions`"));
     }

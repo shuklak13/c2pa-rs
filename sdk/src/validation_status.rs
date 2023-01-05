@@ -96,7 +96,15 @@ impl ValidationStatus {
         match error {
             e if e.starts_with("ClaimMissing") => CLAIM_MISSING,
             e if e.starts_with("AssertionMissing") => ASSERTION_MISSING,
-            e if e.starts_with("AssertionDecoding") => STATUS_ASSERTION_MALFORMED, // todo: no code for invalid assertion format
+            e if e.starts_with("AssertionDecoding") => {
+                if e.contains("missing") {
+                    ASSERTION_REQUIRED_MISSING
+                } else if e.contains("application/json") {
+                    ASSERTION_JSON_INVALID
+                } else {
+                    ASSERTION_CBOR_INVALID
+                }
+            }
             e if e.starts_with("HashMismatch") => ASSERTION_DATAHASH_MATCH,
             e if e.starts_with("PrereleaseError") => STATUS_PRERELEASE,
             _ => GENERAL_ERROR,
@@ -108,13 +116,18 @@ impl ValidationStatus {
         match error {
             Error::ClaimMissing { .. } => CLAIM_MISSING,
             Error::AssertionMissing { .. } => ASSERTION_MISSING,
-            Error::AssertionDecoding(code) if code.content_type == "application/json" => {
-                ASSERTION_JSON_INVALID
+            Error::AssertionDecoding(err) => {
+                dbg!(&err);
+                if err.to_string().contains("missing") {
+                    ASSERTION_REQUIRED_MISSING
+                } else {
+                    match err.content_type.as_str() {
+                        "application/json" => ASSERTION_JSON_INVALID,
+                        "application/cbor" => ASSERTION_CBOR_INVALID,
+                        _ => GENERAL_ERROR,
+                    }
+                }
             }
-            Error::AssertionDecoding(code) if code.content_type == "application/cbor" => {
-                ASSERTION_CBOR_INVALID
-            }
-            Error::AssertionDecoding(_) => ASSERTION_REQUIRED_MISSING, // use this as a default assertion Decoding case for now
             Error::HashMismatch(_) => ASSERTION_DATAHASH_MATCH,
             Error::PrereleaseError => STATUS_PRERELEASE,
             Error::RemoteManifestFetch(_) => MANIFEST_INACCESSIBLE,
@@ -436,7 +449,6 @@ pub const GENERAL_ERROR: &str = "general.error";
 
 // -- unofficial status codes --
 pub(crate) const STATUS_PRERELEASE: &str = "com.adobe.prerelease";
-pub(crate) const STATUS_ASSERTION_MALFORMED: &str = "com.adobe.assertion.malformed";
 pub(crate) const MANIFEST_INACCESSIBLE: &str = "com.adobe.manifest.inaccessible";
 
 /// Returns `true` if the status code is a known C2PA success status code.
