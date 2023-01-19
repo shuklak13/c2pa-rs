@@ -23,7 +23,6 @@ use c2pa::{
     create_signer, jumbf_io, Error, Ingredient, IngredientOptions, Manifest, ManifestStore, Signer,
     SigningAlg,
 };
-use image::GenericImageView;
 use nom::AsBytes;
 use serde::Deserialize;
 use twoway::find_bytes;
@@ -218,8 +217,7 @@ impl MakeTestImages {
                 let parent = Ingredient::from_file_with_options(src_path, &ImageOptions::new())?;
 
                 actions = actions.add_action(
-                    Action::new(c2pa_action::OPENED)
-                        .set_parameter("identifier".to_owned(), parent.instance_id().to_owned())?,
+                    Action::new(c2pa_action::OPENED).set_instance_id(parent.instance_id()),
                 );
                 manifest.set_parent(parent)?;
 
@@ -264,7 +262,7 @@ impl MakeTestImages {
                 0 | 1 => img.width() / 2,
                 _ => img.width() / ing_vec.len() as u32,
             };
-            let height = img.height() as u32 / 2;
+            let height = img.height() / 2;
 
             let mut x = 0;
             for ing in ing_vec {
@@ -279,14 +277,12 @@ impl MakeTestImages {
                 // create and add the ingredient
                 let ingredient =
                     Ingredient::from_file_with_options(ing_path, &ImageOptions::new())?;
-                actions =
-                    actions.add_action(Action::new(c2pa_action::PLACED).set_parameter(
-                        "identifier".to_owned(),
-                        ingredient.instance_id().to_owned(),
-                    )?);
+                actions = actions.add_action(
+                    Action::new(c2pa_action::PLACED).set_instance_id(ingredient.instance_id()),
+                );
                 manifest.add_ingredient(ingredient);
 
-                x += width;
+                x += width as i64;
             }
             // record what we did as an action (only need to record this once)
             actions = actions.add_action(Action::new(c2pa_action::RESIZED));
@@ -365,7 +361,7 @@ impl MakeTestImages {
             _ => panic!("bad parameter"),
         };
 
-        std::fs::copy(&self.make_path(src), &dst_path).context("copying for make_err")?;
+        std::fs::copy(self.make_path(src), &dst_path).context("copying for make_err")?;
 
         Self::patch_file(&dst_path, search_bytes, replace_bytes)
             .context(format!("patching {}", op))?;
@@ -398,7 +394,7 @@ impl MakeTestImages {
                 "copy" => self.make_copy(recipe)?,
                 _ => return Err(Error::BadParam(recipe.op.to_string()).into()),
             };
-            let manifest_store = ManifestStore::from_file(&dst_path);
+            let manifest_store = ManifestStore::from_file(dst_path);
 
             if recipe.op.as_str() != "copy" {
                 println!("{}", manifest_store?);

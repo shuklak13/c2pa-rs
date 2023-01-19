@@ -365,6 +365,16 @@ impl Store {
         placeholder
     }
 
+    /// Return certificate chain for the provenance claim
+    pub fn get_provenance_cert_chain(&self) -> Result<String> {
+        let claim = self.provenance_claim().ok_or(Error::ProvenanceMissing)?;
+
+        match claim.get_cert_chain() {
+            Ok(chain) => String::from_utf8(chain).map_err(|_e| Error::CoseInvalidCert),
+            Err(e) => Err(e),
+        }
+    }
+
     /// Sign the claim and return signature.
     #[cfg(feature = "sign")]
     pub fn sign_claim(
@@ -1865,10 +1875,17 @@ impl Store {
         dest_path: &Path,
         reserve_size: usize,
     ) -> Result<Vec<u8>> {
-        // clone the source to working copy if requested
+        // force generate external manifests for unknown types
+        let ext = match get_supported_file_extension(dest_path) {
+            Some(ext) => ext,
+            None => {
+                let pc = self.provenance_claim_mut().ok_or(Error::ClaimEncoding)?;
+                pc.set_external_manifest(); // generate external manifests for unknown types
+                MANIFEST_STORE_EXT.to_owned()
+            }
+        };
 
-        get_supported_file_extension(asset_path).ok_or(Error::UnsupportedType)?; // verify extensions
-        let ext = get_supported_file_extension(dest_path).ok_or(Error::UnsupportedType)?;
+        // clone the source to working copy if requested
         if asset_path != dest_path {
             fs::copy(asset_path, dest_path).map_err(Error::IoError)?;
         }
@@ -1877,26 +1894,30 @@ impl Store {
 
         // 1) Add DC provenance XMP
         let pc = self.provenance_claim().ok_or(Error::ClaimEncoding)?;
-        let output_path = if cfg!(feature = "xmp_write") {
-            match pc.remote_manifest() {
-                crate::claim::RemoteManifest::NoRemote => {
-                    // even though this block is protected by the outer cfg!(feature = "xmp_write")
-                    // the class embedded_xmp is not defined so we have to explicitly exclude it from the build
-                    #[cfg(feature = "xmp_write")]
-                    if let Some(provenance) = self.provenance_path() {
-                        // update XMP info & add xmp hash to provenance claim
-                        embedded_xmp::add_manifest_uri_to_file(dest_path, &provenance)?;
-                    } else {
-                        return Err(Error::XmpWriteError);
+        let output_path = match pc.remote_manifest() {
+            crate::claim::RemoteManifest::NoRemote => {
+                // even though this block is protected by the outer cfg!(feature = "xmp_write")
+                // the class embedded_xmp is not defined so we have to explicitly exclude it from the build
+                #[cfg(feature = "xmp_write")]
+                if let Some(provenance) = self.provenance_path() {
+                    // update XMP info & add xmp hash to provenance claim
+                    embedded_xmp::add_manifest_uri_to_file(dest_path, &provenance)?;
+                } else {
+                    return Err(Error::XmpWriteError);
+                }
+                dest_path.to_path_buf()
+            }
+            crate::claim::RemoteManifest::SideCar => {
+                // remove any previous c2pa manifest from the asset
+                match remove_jumbf_from_file(dest_path) {
+                    Ok(_) | Err(Error::UnsupportedType) => {
+                        dest_path.with_extension(MANIFEST_STORE_EXT)
                     }
-                    dest_path.to_path_buf()
+                    Err(e) => return Err(e),
                 }
-                crate::claim::RemoteManifest::SideCar => {
-                    // remove any previous c2pa manifest from the asset
-                    remove_jumbf_from_file(dest_path)?;
-                    dest_path.with_extension(MANIFEST_STORE_EXT)
-                }
-                crate::claim::RemoteManifest::Remote(_url) => {
+            }
+            crate::claim::RemoteManifest::Remote(_url) => {
+                if cfg!(feature = "xmp_write") {
                     let d = dest_path.with_extension(MANIFEST_STORE_EXT);
                     // remove any previous c2pa manifest from the asset
                     remove_jumbf_from_file(dest_path)?;
@@ -1905,28 +1926,20 @@ impl Store {
                     #[cfg(feature = "xmp_write")]
                     embedded_xmp::add_manifest_uri_to_file(dest_path, &_url)?;
                     d
+                } else {
+                    return Err(Error::BadParam("requires 'xmp_write' feature".to_string()));
                 }
-                crate::claim::RemoteManifest::EmbedWithRemote(_url) => {
+            }
+            crate::claim::RemoteManifest::EmbedWithRemote(_url) => {
+                if cfg!(feature = "xmp_write") {
                     // even though this block is protected by the outer cfg!(feature = "xmp_write")
                     // the class embedded_xmp is not defined so we have to explicitly exclude it from the build
                     #[cfg(feature = "xmp_write")]
                     embedded_xmp::add_manifest_uri_to_file(dest_path, &_url)?;
 
                     dest_path.to_path_buf()
-                }
-            }
-        } else {
-            // only side car and embedded supported without feature "xmp_write"
-            match pc.remote_manifest() {
-                crate::claim::RemoteManifest::NoRemote => dest_path.to_path_buf(),
-                crate::claim::RemoteManifest::SideCar => {
-                    // remove any previous c2pa manifest from the asset
-                    remove_jumbf_from_file(dest_path)?;
-                    dest_path.with_extension(MANIFEST_STORE_EXT)
-                }
-                crate::claim::RemoteManifest::Remote(_)
-                | crate::claim::RemoteManifest::EmbedWithRemote(_) => {
-                    return Err(Error::BadParam("requires 'xmp_write' feature".to_string()))
+                } else {
+                    return Err(Error::BadParam("requires 'xmp_write' feature".to_string()));
                 }
             }
         };
@@ -2162,11 +2175,19 @@ impl Store {
     #[cfg(feature = "file_io")]
     pub fn load_jumbf_from_path(in_path: &Path) -> Result<Vec<u8>> {
         let external_manifest = in_path.with_extension(MANIFEST_STORE_EXT);
+        let external_exists = external_manifest.exists();
 
         match load_jumbf_from_file(in_path) {
             Ok(manifest_bytes) => Ok(manifest_bytes),
+            Err(Error::UnsupportedType) => {
+                if external_exists {
+                    std::fs::read(external_manifest).map_err(Error::IoError)
+                } else {
+                    Err(Error::UnsupportedType)
+                }
+            }
             Err(Error::JumbfNotFound) => {
-                if external_manifest.exists() {
+                if external_exists {
                     std::fs::read(external_manifest).map_err(Error::IoError)
                 } else {
                     // check for remote manifest
@@ -2302,7 +2323,7 @@ impl Store {
             if store.trust_handler().is_empty() {
                 store.trust_handler_mut().load_default_trust()?;
             }
-            
+
             // verify the store
             if verify {
                 // verify store and claims
@@ -2427,7 +2448,6 @@ pub mod tests {
     #![allow(clippy::unwrap_used)]
 
     use tempfile::tempdir;
-    use thiserror::private::PathAsDisplay;
     use twoway::find_bytes;
 
     use super::*;
@@ -2580,6 +2600,67 @@ pub mod tests {
 
         Store::load_from_asset(&op, true, &mut OneShotStatusTracker::new())
             .expect_err("Should not verify");
+    }
+
+    #[test]
+    #[cfg(feature = "file_io")]
+    fn test_unknown_asset_type_generation() {
+        // test adding to actual image
+        let ap = fixture_path("unsupported_type.txt");
+        let temp_dir = tempdir().expect("temp dir");
+        let op = temp_dir_path(&temp_dir, "unsupported_type.txt");
+
+        // Create claims store.
+        let mut store = Store::new();
+
+        // Create a new claim.
+        let claim1 = create_test_claim().unwrap();
+
+        // Create a new claim.
+        let mut claim2 = Claim::new("Photoshop", Some("Adobe"));
+        create_editing_claim(&mut claim2).unwrap();
+
+        // Create a 3rd party claim
+        let mut claim_capture = Claim::new("capture", Some("claim_capture"));
+        create_capture_claim(&mut claim_capture).unwrap();
+
+        // Do we generate JUMBF?
+        let signer = temp_signer();
+
+        // Move the claim to claims list. Note this is not real, the claims would have to be signed in between commmits
+        store.commit_claim(claim1).unwrap();
+        store.save_to_asset(&ap, &signer, &op).unwrap();
+
+        // read from new file
+        let new_store =
+            Store::load_from_asset(&op, true, &mut OneShotStatusTracker::new()).unwrap();
+
+        // can  we get by the ingredient data back
+
+        // dump store and compare to original
+        for claim in new_store.claims() {
+            let _restored_json = claim
+                .to_json(AssertionStoreJsonFormat::OrderedList, false)
+                .unwrap();
+            let _orig_json = store
+                .get_claim(claim.label())
+                .unwrap()
+                .to_json(AssertionStoreJsonFormat::OrderedList, false)
+                .unwrap();
+
+            println!(
+                "Claim: {} \n{}",
+                claim.label(),
+                claim
+                    .to_json(AssertionStoreJsonFormat::OrderedListNoBinary, true)
+                    .expect("could not restore from json")
+            );
+
+            for hashed_uri in claim.assertions() {
+                let (label, instance) = Claim::assertion_label_from_link(&hashed_uri.url());
+                claim.get_claim_assertion(&label, instance).unwrap();
+            }
+        }
     }
 
     struct BadSigner {}
@@ -2881,12 +2962,12 @@ pub mod tests {
     }
 
     #[test]
-    fn test_unsupported_type() {
+    fn test_unsupported_type_without_external_manifest() {
         let ap = fixture_path("Purple Square.psd");
         let mut report = DetailedStatusTracker::new();
         let result = Store::load_from_asset(&ap, true, &mut report);
         assert!(matches!(result, Err(Error::UnsupportedType)));
-        println!("Error report for {}: {:?}", ap.as_display(), report);
+        println!("Error report for {}: {:?}", ap.display(), report);
         assert!(!report.get_log().is_empty());
 
         assert!(report_has_err(report.get_log(), Error::UnsupportedType));
@@ -2900,7 +2981,7 @@ pub mod tests {
         let _r = Store::load_from_asset(&ap, true, &mut report);
 
         // error report
-        println!("Error report for {}: {:?}", ap.as_display(), report);
+        println!("Error report for {}: {:?}", ap.display(), report);
         assert!(!report.get_log().is_empty());
 
         assert!(report_has_err(report.get_log(), Error::PrereleaseError));
@@ -2914,7 +2995,7 @@ pub mod tests {
         Store::load_from_asset(&ap, true, &mut report).unwrap();
 
         // error report
-        println!("Error report for {}: {:?}", ap.as_display(), report);
+        println!("Error report for {}: {:?}", ap.display(), report);
         assert!(!report.get_log().is_empty());
 
         let errs = report_split_errors(report.get_log_mut());
@@ -2931,11 +3012,7 @@ pub mod tests {
         let mut report = DetailedStatusTracker::new();
         let _result = Store::load_from_asset(&ap, true, &mut report);
 
-        println!(
-            "Error report for {}: {:?}",
-            ap.as_display(),
-            report.get_log()
-        );
+        println!("Error report for {}: {:?}", ap.display(), report.get_log());
         assert!(!report.get_log().is_empty());
         let errors = report_split_errors(report.get_log_mut());
         assert!(errors[0].error_str().unwrap().starts_with("IoError"));
@@ -2947,11 +3024,7 @@ pub mod tests {
         let mut report = DetailedStatusTracker::new();
         let _r = Store::load_from_asset(&ap, true, &mut report);
 
-        println!(
-            "Error report for {}: {:?}",
-            ap.as_display(),
-            report.get_log()
-        );
+        println!("Error report for {}: {:?}", ap.display(), report.get_log());
         assert!(!report.get_log().is_empty());
         let errors = report_split_errors(report.get_log_mut());
         assert!(errors[0].error_str().unwrap().starts_with("Prerelease"));
@@ -3238,7 +3311,7 @@ pub mod tests {
 
         println!(
             "Error report for {}: {:?}",
-            ap.as_display(),
+            ap.display(),
             report.get_log()
         );
         assert!(report.get_log().is_empty());

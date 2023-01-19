@@ -82,7 +82,10 @@ pub(crate) fn check_chain_order_der(cert_ders: &[Vec<u8>]) -> bool {
 
 // internal util function to dump the cert chain in PEM format
 #[allow(dead_code)]
-pub(crate) fn dump_cert_chain(certs: &[Vec<u8>], output_path: &std::path::Path) -> Result<()> {
+pub(crate) fn dump_cert_chain(
+    certs: &[Vec<u8>],
+    output_path: Option<&std::path::Path>,
+) -> Result<Vec<u8>> {
     let mut out_buf: Vec<u8> = Vec::new();
 
     for der_bytes in certs {
@@ -92,5 +95,8 @@ pub(crate) fn dump_cert_chain(certs: &[Vec<u8>], output_path: &std::path::Path) 
         out_buf.append(&mut c_pem);
     }
 
-    std::fs::write(output_path, &out_buf).map_err(Error::IoError)
+    if let Some(op) = output_path {
+        std::fs::write(op, &out_buf).map_err(Error::IoError)?;
+    }
+    Ok(out_buf)
 }

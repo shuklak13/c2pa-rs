@@ -115,7 +115,6 @@ impl Manifest {
             remote_manifest: None,
         }
     }
-
     /// Returns a User Agent formatted string identifying the software/hardware/system produced this claim
     pub fn claim_generator(&self) -> &str {
         self.claim_generator.as_str()
@@ -358,7 +357,6 @@ impl Manifest {
     }
 
     /// Retrieves an assertion by label and instance if it exists or Error::NotFound
-    ///
     pub fn find_assertion_with_instance<T: DeserializeOwned>(
         &self,
         label: &str,
@@ -375,9 +373,9 @@ impl Manifest {
         }
     }
 
-    // keep this private until we support it externally
-    #[allow(dead_code)]
-    pub(crate) fn add_redaction<S: Into<String>>(&mut self, label: S) -> Result<&mut Self> {
+    /// Redacts an assertion from the parent [Ingredient] of this manifest using the provided
+    /// assertion label.
+    pub fn add_redaction<S: Into<String>>(&mut self, label: S) -> Result<&mut Self> {
         // todo: any way to verify if this assertion exists in the parent claim here?
         match self.redactions.as_mut() {
             Some(redactions) => redactions.push(label.into()),
@@ -591,9 +589,13 @@ impl Manifest {
             }
         }
 
+        let mut ingredient_map = HashMap::new();
         // add all ingredients to the claim
         for ingredient in &self.ingredients {
-            ingredient.add_to_claim(&mut claim, self.redactions.clone())?;
+            ingredient_map.insert(
+                ingredient.instance_id(),
+                ingredient.add_to_claim(&mut claim, self.redactions.clone())?,
+            );
         }
 
         let salt = DefaultSalt::default();
@@ -602,9 +604,33 @@ impl Manifest {
         for manifest_assertion in &self.assertions {
             match manifest_assertion.label() {
                 Actions::LABEL => {
-                    let actions: Actions = manifest_assertion.to_assertion()?;
-                    // todo: fixup parameters field from instance_id to ingredient uri for
-                    // c2pa.transcoded, c2pa.repackaged, and c2pa.placed action
+                    let mut actions: Actions = manifest_assertion.to_assertion()?;
+
+                    // fixup parameters field from instance_id to ingredient uri
+                    let needs_ingredient: Vec<(usize, crate::assertions::Action)> = actions
+                        .actions()
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(i, a)| {
+                            if a.instance_id().is_some() && a.get_parameter("ingredient").is_none()
+                            {
+                                Some((i, a.clone()))
+                            } else {
+                                None
+                            }
+                        })
+                        .collect();
+
+                    for (index, action) in needs_ingredient {
+                        if let Some(id) = action.instance_id() {
+                            if let Some(hash_url) = ingredient_map.get(id) {
+                                let update =
+                                    action.set_parameter("ingredient", hash_url.clone())?;
+                                actions = actions.update_action(index, update);
+                            }
+                        }
+                    }
+
                     claim.add_assertion(&actions)
                 }
                 CreativeWork::LABEL => {
@@ -825,6 +851,11 @@ impl Manifest {
             .save_to_asset_remote_signed(source_path.as_ref(), signer, dest_path.as_ref())
             .await
     }
+    #[cfg(feature = "file_io")]
+    pub fn remove_manifest<P: AsRef<Path>>(asset_path: P) -> Result<()> {
+        use crate::jumbf_io::remove_jumbf_from_file;
+        remove_jumbf_from_file(asset_path.as_ref())
+    }
 }
 
 impl std::fmt::Display for Manifest {
@@ -853,17 +884,19 @@ pub(crate) mod tests {
 
     #[cfg(feature = "sign")]
     use crate::utils::test::temp_signer;
-    use crate::{
-        assertions::{c2pa_action, Action, Actions},
-        utils::test::TEST_VC,
-        Manifest, Result,
-    };
     #[cfg(feature = "file_io")]
     use crate::{
+        assertions::labels::ACTIONS,
+        error::Error,
         status_tracker::{DetailedStatusTracker, StatusTracker},
         store::Store,
         utils::test::{fixture_path, temp_dir_path, temp_fixture_path, TEST_SMALL_JPEG},
         validation_status, Ingredient,
+    };
+    use crate::{
+        assertions::{c2pa_action, Action, Actions},
+        utils::test::TEST_VC,
+        Manifest, Result,
     };
 
     // example of random data structure as an assertion
@@ -954,7 +987,7 @@ pub(crate) mod tests {
         let ap = fixture_path(TEST_SMALL_JPEG);
         let temp_dir = tempdir().expect("temp dir");
         let test_output = temp_dir_path(&temp_dir, "ws_bad_assertion.jpg");
-        std::fs::copy(&ap, &test_output).expect("copy");
+        std::fs::copy(ap, test_output).expect("copy");
 
         let mut manifest = test_manifest();
 
@@ -1056,11 +1089,6 @@ pub(crate) mod tests {
             .set_parent(Ingredient::from_file(&output).expect("from_file"))
             .expect("set_parent");
 
-        // todo: add a test to validate that actions assertions cannot be redacted
-        // let mut actions = Actions::new();
-        // actions.add_action(Action::new(C2PA_ACTION_EDITED).parameters("gaussian_blur"));
-        // ws.add_assertion("c2pa.actions", &actions).expect("add_assertion"); // must use .get() with Actions
-
         // redact the assertion
         manifest2
             .add_redaction(ASSERTION_LABEL)
@@ -1085,6 +1113,45 @@ pub(crate) mod tests {
 
         let claim1 = store3.get_claim(&claim1_label).unwrap();
         assert!(claim1.get_claim_assertion(redacted_uri, 0).is_none());
+    }
+
+    #[test]
+    #[cfg(feature = "file_io")]
+    fn test_action_assertion_redaction_error() {
+        let temp_dir = tempdir().expect("temp dir");
+        let parent_output = temp_fixture_path(&temp_dir, TEST_SMALL_JPEG);
+
+        // Create parent with a c2pa_action type assertion.
+        let mut parent_manifest = test_manifest();
+        let actions = Actions::new().add_action(
+            Action::new(c2pa_action::FILTERED)
+                .set_parameter("name".to_owned(), "gaussian blur")
+                .unwrap()
+                .set_when("2015-06-26T16:43:23+0200"),
+        );
+        parent_manifest
+            .add_assertion(&actions)
+            .expect("add_assertion");
+
+        let signer = temp_signer();
+        parent_manifest
+            .embed(&parent_output, &parent_output, &signer)
+            .expect("embed");
+
+        // Add parent_manifest as an ingredient of the new manifest and redact the assertion `c2pa.actions`.
+        let mut manifest = test_manifest();
+        manifest
+            .set_parent(Ingredient::from_file(&parent_output).expect("from_file"))
+            .expect("set_parent");
+        assert!(manifest.add_redaction(ACTIONS).is_ok());
+
+        // Attempt embedding the manifest with the invalid redaction.
+        let redact_output = temp_fixture_path(&temp_dir, TEST_SMALL_JPEG);
+        let embed_result = manifest.embed(&redact_output, &redact_output, &signer);
+        assert!(matches!(
+            embed_result.err().unwrap(),
+            Error::AssertionInvalidRedaction
+        ));
     }
 
     #[test]
@@ -1137,7 +1204,7 @@ pub(crate) mod tests {
 
         #[async_trait::async_trait]
         impl crate::signer::RemoteSigner for MyRemoteSigner {
-            async fn sign_remote(&self, claim_bytes: &[u8]) -> crate::error::Result<Vec<u8>> {
+            async fn sign_remote(&self, claim_bytes: &[u8]) -> Result<Vec<u8>> {
                 let signer = crate::openssl::temp_signer_async::AsyncSignerAdapter::new(
                     crate::SigningAlg::Ps256,
                 );
