@@ -677,7 +677,7 @@ impl Manifest {
             for vc in verified_credentials {
                 let vc_str = &vc.to_string();
                 let id = Claim::vc_id(vc_str)?;
-                vc_table.insert(id, claim.add_verifiable_credential(vc_str)?);
+                vc_table.insert(id, claim.add_verifiable_credential(vc_str, None, None)?);
             }
         }
 

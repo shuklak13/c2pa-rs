@@ -648,18 +648,31 @@ impl Claim {
     ///    },
     /// ```
     // the "id" value will be used as the label in the vcstore
-    pub fn add_verifiable_credential(&mut self, vc_json: &str) -> Result<HashedUri> {
+    pub fn add_verifiable_credential(&mut self, vc_json: &str, salt: Option<Vec<u8>>, proof_signer: Option<&dyn crate::Signer>) -> Result<HashedUri> {
         let id = Claim::vc_id(vc_json)?;
         let credential = AssertionData::Json(vc_json.to_string());
 
         let link = jumbf::labels::to_verifiable_credential_uri(self.label(), &id);
 
         // salt box for 1.2 VC redaction support
-        let ds = DefaultSalt::default();
-        let salt = ds.generate_salt();
+        let salt  = match salt {
+            Some(s) => Some(s),
+            None => {
+                let ds = DefaultSalt::default();
+                ds.generate_salt()
+            }
+        };
+
+        let vc_bytes = match proof_signer {
+            Some(_ps) => {
+                let vc: Value = serde_json::from_str(vc_json).map_err(|_err| Error::VerifiableCredentialInvalid)?; // check for json validity
+                vc.to_string().as_bytes().to_vec()
+            }
+            None => vc_json.as_bytes().to_vec(),
+        };
 
         // assertion JUMBF box hash for 1.2 validation
-        let assertion = Assertion::from_data_json(&id, vc_json.as_bytes())?;
+        let assertion = Assertion::from_data_json(&id, &vc_bytes)?;
         let hash = Claim::calc_assertion_box_hash(&id, &assertion, salt, self.alg())?;
 
         let c2pa_assertion = C2PAAssertion::new(link, Some(self.alg().to_string()), &hash);
@@ -669,6 +682,8 @@ impl Claim {
 
         Ok(c2pa_assertion)
     }
+
+
 
     pub fn get_verifiable_credentials(&self) -> &Vec<AssertionData> {
         &self.vc_store

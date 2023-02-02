@@ -1045,7 +1045,7 @@ impl Store {
                     let json_str = String::from_utf8(vc_json.json().to_vec())
                         .map_err(|_| InvalidClaimError::VerifiableCredentialStoreInvalid)?;
 
-                    claim.add_verifiable_credential(&json_str)?;
+                    claim.add_verifiable_credential(&json_str, vc_desc_box.get_salt(), None)?;
                 }
             }
 
