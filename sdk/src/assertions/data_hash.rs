@@ -19,10 +19,12 @@ use serde_bytes::ByteBuf;
 use crate::{
     assertion::{Assertion, AssertionBase, AssertionCbor},
     assertions::labels,
-    asset_io::CAIReadWrite,
+    asset_io::CAIRead,
     cbor_types::UriT,
     error::{Error, Result},
-    utils::hash_utils::{hash_stream_by_alg, verify_asset_by_alg, verify_by_alg, Exclusion},
+    utils::hash_utils::{
+        hash_stream_by_alg, verify_asset_by_alg, verify_by_alg, verify_stream_by_alg, Exclusion,
+    },
 };
 
 const ASSERTION_CREATION_VERSION: usize = 1;
@@ -106,7 +108,7 @@ impl DataHash {
     }
 
     /// generate the hash value for the Asset stream using the range from the DataHash
-    pub fn gen_hash_from_stream(&mut self, stream: &mut dyn CAIReadWrite) -> Result<()> {
+    pub fn gen_hash_from_stream(&mut self, stream: &mut dyn CAIRead) -> Result<()> {
         self.hash = self.hash_from_stream(stream)?;
         Ok(())
     }
@@ -156,7 +158,7 @@ impl DataHash {
 
     /// generate the asset hash from a stream using the constructed
     /// start and length values
-    pub fn hash_from_stream(&mut self, stream: &mut dyn CAIReadWrite) -> Result<Vec<u8>> {
+    pub fn hash_from_stream(&mut self, stream: &mut dyn CAIRead) -> Result<Vec<u8>> {
         if self.is_remote_hash() {
             return Err(Error::BadParam(
                 "asset hash is remote, not yet supported".to_owned(),
@@ -198,6 +200,29 @@ impl DataHash {
         let exclusions = self.exclusions.as_ref().cloned();
 
         if verify_by_alg(&curr_alg, &self.hash, data, exclusions) {
+            Ok(())
+        } else {
+            Err(Error::HashMismatch("Hashes do not match".to_owned()))
+        }
+    }
+
+    ///  Used to verify a DataHash against a stream.
+    pub fn verify_stream_hash(&self, stream: &mut dyn CAIRead, alg: Option<String>) -> Result<()> {
+        if self.is_remote_hash() {
+            return Err(Error::BadParam("asset hash is remote".to_owned()));
+        }
+
+        let curr_alg = match &self.alg {
+            Some(a) => a.clone(),
+            None => match alg {
+                Some(a) => a,
+                None => "sha256".to_string(),
+            },
+        };
+
+        let exclusions = self.exclusions.as_ref().cloned();
+
+        if verify_stream_by_alg(&curr_alg, &self.hash, stream, exclusions)? {
             Ok(())
         } else {
             Err(Error::HashMismatch("Hashes do not match".to_owned()))

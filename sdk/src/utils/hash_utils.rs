@@ -27,7 +27,7 @@ use serde::{Deserialize, Serialize};
 // direct sha functions
 use sha2::{Digest, Sha256, Sha384, Sha512};
 
-use crate::{asset_io::CAIReadWrite, Error, Result};
+use crate::{asset_io::CAIRead, Error, Result};
 
 const MAX_HASH_BUF: usize = 256 * 1024 * 1024; // cap memory usage to 256MB
 
@@ -185,7 +185,7 @@ pub fn hash_asset_by_alg(
 // Return hash bytes for stream using desired hashing algorithm.
 pub fn hash_stream_by_alg(
     alg: &str,
-    data: &mut dyn CAIReadWrite,
+    data: &mut dyn CAIRead,
     exclusions: Option<Vec<Exclusion>>,
 ) -> Result<Vec<u8>> {
     use Hasher::*;
@@ -322,6 +322,18 @@ pub fn verify_by_alg(
     // hash with the same algorithm as target
     let data_hash = hash_by_alg(alg, data, exclusions);
     vec_compare(hash, &data_hash)
+}
+
+// verify the hash from stream using the specified algorithm
+pub fn verify_stream_by_alg(
+    alg: &str,
+    hash: &[u8],
+    stream: &mut dyn CAIRead,
+    exclusions: Option<Vec<Exclusion>>,
+) -> Result<bool> {
+    // hash with the same algorithm as target
+    let data_hash = hash_stream_by_alg(alg, stream, exclusions)?;
+    Ok(vec_compare(hash, &data_hash))
 }
 
 // verify the hash using the specified alogrithm

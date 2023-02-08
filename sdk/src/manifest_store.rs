@@ -243,8 +243,8 @@ impl ManifestStore {
     ) -> Result<ManifestStore> {
         let mut validation_log = DetailedStatusTracker::new();
         let store = Store::from_jumbf(manifest_bytes, &mut validation_log)?;
-
-        Store::verify_store_async(&store, asset_bytes, &mut validation_log).await?;
+        let mut asset_data = std::io::Cursor::new(asset_bytes);
+        Store::verify_store_async(&store, &mut asset_data, &mut validation_log).await?;
 
         Ok(Self::from_store(&store, &mut validation_log))
     }
@@ -416,6 +416,8 @@ mod tests {
         )
         .expect("from_store_with_resources");
         println!("{manifest_store}");
+        std::fs::write("../target/tmp/ms/manifest.json", manifest_store.to_string())
+            .expect("write");
 
         assert!(manifest_store.active_label().is_some());
         assert!(manifest_store.get_active().is_some());

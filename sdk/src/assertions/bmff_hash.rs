@@ -24,9 +24,12 @@ use crate::{
     assertion::{Assertion, AssertionBase, AssertionCbor},
     assertions::labels,
     asset_handlers::bmff_io::bmff_to_jumbf_exclusions,
+    asset_io::CAIRead,
     cbor_types::UriT,
     error::Result,
-    utils::hash_utils::{hash_asset_by_alg, verify_asset_by_alg, verify_by_alg},
+    utils::hash_utils::{
+        hash_asset_by_alg, verify_asset_by_alg, verify_by_alg, verify_stream_by_alg,
+    },
     Error,
 };
 
@@ -208,6 +211,27 @@ impl BmffHash {
             Err(Error::BadParam("could not generate data hash".to_string()))
         } else {
             Ok(hash)
+        }
+    }
+
+    pub fn verify_stream_hash(&self, stream: &mut dyn CAIRead, alg: Option<String>) -> Result<()> {
+        let curr_alg = match &self.alg {
+            Some(a) => a.clone(),
+            None => match alg {
+                Some(a) => a,
+                None => "sha256".to_string(),
+            },
+        };
+
+        let bmff_exclusions = &self.exclusions;
+
+        // convert BMFF exclusion map to flat exclusion list
+        let exclusions = bmff_to_jumbf_exclusions(stream, bmff_exclusions)?;
+
+        if verify_stream_by_alg(&curr_alg, &self.hash, stream, Some(exclusions))? {
+            Ok(())
+        } else {
+            Err(Error::HashMismatch("Hashes do not match".to_owned()))
         }
     }
 

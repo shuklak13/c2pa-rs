@@ -13,7 +13,10 @@
 
 #[cfg(feature = "sign")]
 use std::io::SeekFrom;
-use std::{collections::HashMap, io::Cursor};
+use std::{
+    collections::HashMap,
+    io::{Cursor, Seek},
+};
 #[cfg(feature = "file_io")]
 use std::{fs, path::Path};
 
@@ -40,11 +43,12 @@ use crate::{
 use crate::{
     assertion::{Assertion, AssertionBase, AssertionDecodeError, AssertionDecodeErrorCause},
     assertions::{labels, Ingredient, Relationship},
-    claim::{Claim, ClaimAssertion, ClaimAssetData},
+    asset_io::CAIRead,
+    claim::{Claim, ClaimAssertion},
     error::{Error, Result},
     hash_utils::{hash_by_alg, vec_compare, verify_by_alg},
     jumbf::{self, boxes::*},
-    jumbf_io::load_jumbf_from_memory,
+    jumbf_io::load_jumbf_from_stream,
     status_tracker::{log_item, OneShotStatusTracker, StatusTracker},
     validation_status, ManifestStoreReport,
 };
@@ -996,7 +1000,7 @@ impl Store {
     fn ingredient_checks(
         store: &Store,
         claim: &Claim,
-        asset_data: &ClaimAssetData<'_>,
+        asset_data: &mut dyn CAIRead,
         validation_log: &mut impl StatusTracker,
     ) -> Result<()> {
         let mut num_parent_ofs = 0;
@@ -1104,7 +1108,7 @@ impl Store {
     async fn ingredient_checks_async(
         store: &Store,
         claim: &Claim,
-        asset_bytes: &[u8],
+        asset_bytes: &mut dyn CAIRead,
         validation_log: &mut impl StatusTracker,
     ) -> Result<()> {
         // walk the ingredients
@@ -1171,7 +1175,7 @@ impl Store {
     /// validation_log: If present all found errors are logged and returned, other wise first error causes exit and is returned  
     pub async fn verify_store_async(
         store: &Store,
-        asset_bytes: &[u8],
+        asset_bytes: &mut dyn CAIRead,
         validation_log: &mut impl StatusTracker,
     ) -> Result<()> {
         let claim = match store.provenance_claim() {
@@ -1202,7 +1206,7 @@ impl Store {
     /// validation_log: If present all found errors are logged and returned, other wise first error causes exit and is returned  
     pub fn verify_store(
         store: &Store,
-        asset_data: &ClaimAssetData<'_>,
+        asset_data: &mut dyn CAIRead,
         validation_log: &mut impl StatusTracker,
     ) -> Result<()> {
         let claim = match store.provenance_claim() {
@@ -1241,7 +1245,7 @@ impl Store {
     // generate a list of AssetHashes based on the location of objects in the stream
     #[cfg(feature = "sign")]
     fn generate_data_hashes_for_stream(
-        stream: &mut dyn CAIReadWrite,
+        stream: &mut dyn CAIRead,
         alg: &str,
         block_locations: &mut Vec<HashObjectPositions>,
         calc_hashes: bool,
@@ -1648,7 +1652,12 @@ impl Store {
         let hashes: Vec<DataHash> = if pc.update_manifest() {
             Vec::new()
         } else {
-            Store::generate_data_hashes_for_stream(stream, pc.alg(), &mut hash_ranges, false)?
+            Store::generate_data_hashes_for_stream(
+                stream.as_cai_read(),
+                pc.alg(),
+                &mut hash_ranges,
+                false,
+            )?
         };
 
         // add the placeholder data hashes to provenance claim so that the required space is reserved
@@ -1676,7 +1685,12 @@ impl Store {
         let updated_hashes = if pc.update_manifest() {
             Vec::new()
         } else {
-            Store::generate_data_hashes_for_stream(stream, pc.alg(), &mut new_hash_ranges, true)?
+            Store::generate_data_hashes_for_stream(
+                stream.as_cai_read(),
+                pc.alg(),
+                &mut new_hash_ranges,
+                true,
+            )?
         };
 
         // patch existing claim hash with updated data
@@ -1909,7 +1923,8 @@ impl Store {
         asset_path: &'_ Path,
         validation_log: &mut impl StatusTracker,
     ) -> Result<()> {
-        Store::verify_store(self, &ClaimAssetData::PathData(asset_path), validation_log)
+        let mut file = std::fs::File::open(asset_path)?;
+        Store::verify_store(self, &mut file, validation_log)
     }
 
     // verify from a buffer without file i/o
@@ -1919,7 +1934,8 @@ impl Store {
         _asset_type: &str,
         validation_log: &mut impl StatusTracker,
     ) -> Result<()> {
-        Store::verify_store(self, &ClaimAssetData::ByteData(buf), validation_log)
+        let mut asset_data = Cursor::new(buf);
+        Store::verify_store(self, &mut asset_data, validation_log)
     }
 
     // fetch remote manifest if possible
@@ -1981,18 +1997,26 @@ impl Store {
         data: &[u8],
         validation_log: &mut impl StatusTracker,
     ) -> Result<Store> {
-        match load_jumbf_from_memory(asset_type, data) {
+        let mut buf_reader = Cursor::new(data);
+        Self::load_cai_from_stream(asset_type, &mut buf_reader, validation_log)
+    }
+
+    /// Return Store from stream
+    pub fn load_cai_from_stream(
+        asset_type: &str,
+        stream: &mut dyn CAIRead,
+        validation_log: &mut impl StatusTracker,
+    ) -> Result<Store> {
+        match load_jumbf_from_stream(asset_type, stream) {
             Ok(manifest_bytes) => {
                 // load and validate with CAI toolkit and dump if desired
                 Store::from_jumbf(&manifest_bytes, validation_log)
             }
             Err(Error::JumbfNotFound) => {
-                let mut buf_reader = Cursor::new(data);
-                if let Some(ext_ref) = crate::utils::xmp_inmemory_utils::XmpInfo::from_source(
-                    &mut buf_reader,
-                    asset_type,
-                )
-                .provenance
+                stream.rewind()?;
+                if let Some(ext_ref) =
+                    crate::utils::xmp_inmemory_utils::XmpInfo::from_source(stream, asset_type)
+                        .provenance
                 {
                     // return an error with the url that should be read
                     Err(Error::RemoteManifestUrl(ext_ref))
@@ -2105,13 +2129,13 @@ impl Store {
             })
     }
 
-    fn get_store_from_memory(
+    fn get_store_from_stream(
         asset_type: &str,
-        data: &[u8],
+        stream: &mut dyn CAIRead,
         validation_log: &mut impl StatusTracker,
     ) -> Result<Store> {
         // load jumbf if available
-        Self::load_cai_from_memory(asset_type, data, validation_log).map_err(|e| {
+        Self::load_cai_from_stream(asset_type, stream, validation_log).map_err(|e| {
             validation_log.log_silent(
                 log_item!("asset", "error loading asset", "get_store_from_memory").set_error(&e),
             );
@@ -2156,11 +2180,36 @@ impl Store {
         verify: bool,
         validation_log: &mut impl StatusTracker,
     ) -> Result<Store> {
-        Store::get_store_from_memory(asset_type, data, validation_log).and_then(|store| {
+        let mut stream = Cursor::new(data);
+        Store::get_store_from_stream(asset_type, &mut stream, validation_log).and_then(|store| {
             // verify the store
             if verify {
                 // verify store and claims
-                Store::verify_store(&store, &ClaimAssetData::ByteData(data), validation_log)?;
+                stream.rewind()?;
+                Store::verify_store(&store, &mut stream, validation_log)?;
+            }
+
+            Ok(store)
+        })
+    }
+
+    /// Load Store from a in-memory asset
+    /// asset_type: asset extension or mime type
+    /// steam: read/seek stream of data to load from
+    /// verify: if true will run verification checks when loading
+    /// validation_log: If present all found errors are logged and returned, otherwise first error causes exit and is returned
+    pub fn load_from_stream(
+        asset_type: &str,
+        stream: &mut dyn CAIRead,
+        verify: bool,
+        validation_log: &mut impl StatusTracker,
+    ) -> Result<Store> {
+        Store::get_store_from_stream(asset_type, stream, validation_log).and_then(|store| {
+            // verify the store
+            if verify {
+                // verify store and claims
+                stream.rewind()?;
+                Store::verify_store(&store, stream, validation_log)?;
             }
 
             Ok(store)
@@ -2178,12 +2227,14 @@ impl Store {
         verify: bool,
         validation_log: &mut impl StatusTracker,
     ) -> Result<Store> {
-        let store = Store::get_store_from_memory(asset_type, data, validation_log)?;
+        let mut stream = Cursor::new(data);
+        let store = Store::get_store_from_stream(asset_type, &mut stream, validation_log)?;
 
         // verify the store
         if verify {
+            stream.rewind()?;
             // verify store and claims
-            Store::verify_store_async(&store, data, validation_log).await?;
+            Store::verify_store_async(&store, &mut stream, validation_log).await?;
         }
 
         Ok(store)

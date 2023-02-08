@@ -45,11 +45,25 @@ impl CAIRead for std::io::Cursor<&[u8]> {}
 impl CAIRead for std::io::Cursor<&mut [u8]> {}
 impl CAIRead for std::io::Cursor<Vec<u8>> {}
 
-pub trait CAIReadWrite: CAIRead + Write {}
+pub trait CAIReadWrite: CAIRead + Write {
+    fn as_cai_read(&mut self) -> &mut dyn CAIRead;
+}
 
-impl CAIReadWrite for std::fs::File {}
-impl CAIReadWrite for std::io::Cursor<&mut [u8]> {}
-impl CAIReadWrite for std::io::Cursor<Vec<u8>> {}
+impl CAIReadWrite for std::fs::File {
+    fn as_cai_read(&mut self) -> &mut dyn CAIRead {
+        self
+    }
+}
+impl CAIReadWrite for std::io::Cursor<&mut [u8]> {
+    fn as_cai_read(&mut self) -> &mut dyn CAIRead {
+        self
+    }
+}
+impl CAIReadWrite for std::io::Cursor<Vec<u8>> {
+    fn as_cai_read(&mut self) -> &mut dyn CAIRead {
+        self
+    }
+}
 
 // Interface for in memory CAI reading
 pub trait CAILoader {
