@@ -410,11 +410,9 @@ mod tests {
     #[test]
     #[cfg(feature = "file_io")]
     fn manifest_report_from_file_with_resources() {
-        let manifest_store = ManifestStore::from_file_with_resources(
-            "tests/fixtures/CIE-sig-CA.jpg",
-            "../target/tmp/ms",
-        )
-        .expect("from_store_with_resources");
+        let manifest_store =
+            ManifestStore::from_file_with_resources("tests/fixtures/CA.jpg", "../target/ms")
+                .expect("from_store_with_resources");
         println!("{manifest_store}");
 
         assert!(manifest_store.active_label().is_some());

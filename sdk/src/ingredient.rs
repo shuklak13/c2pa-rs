@@ -23,16 +23,19 @@ use uuid::Uuid;
 use crate::{
     assertion::{get_thumbnail_image_type, Assertion, AssertionBase},
     assertions::{self, labels, Metadata, Relationship, Thumbnail},
+    asset_io::CAIRead,
     claim::Claim,
     error::{Error, Result},
     hashed_uri::HashedUri,
     jumbf,
+    jumbf_io::load_jumbf_from_stream,
     resource_store::{skip_serializing_resources, ResourceRef, ResourceStore},
+    status_tracker::{log_item, DetailedStatusTracker, StatusTracker},
     store::Store,
-    validation_status::{self, ValidationStatus},
+    utils::xmp_inmemory_utils::XmpInfo,
+    validation_status::{self, status_for_store, ValidationStatus},
 };
-#[cfg(feature = "file_io")]
-use crate::{error::wrap_io_err, validation_status::status_for_store, xmp_inmemory_utils::XmpInfo};
+
 #[derive(Debug, Default, Deserialize, Serialize)]
 /// An `Ingredient` is any external asset that has been used in the creation of an image.
 pub struct Ingredient {
@@ -406,7 +409,7 @@ impl Ingredient {
         let (title, _, format) = Self::get_path_info(path.as_ref());
 
         // if we can open the file try tto get xmp info
-        let xmp_info = match std::fs::File::open(path).map_err(wrap_io_err) {
+        let xmp_info = match std::fs::File::open(path).map_err(Error::IoError) {
             Ok(mut file) => XmpInfo::from_source(&mut file, &format),
             Err(_) => XmpInfo::default(),
         };
@@ -448,6 +451,70 @@ impl Ingredient {
         )
     }
 
+    // utility method to set the validation status from store result and log
+    fn update_validation_status(
+        &mut self,
+        result: Result<Store>,
+        manifest_bytes: Option<Vec<u8>>,
+        validation_log: &mut impl StatusTracker,
+    ) -> Result<()> {
+        match result {
+            Ok(store) => {
+                // generate ValidationStatus from ValidationItems filtering for only errors
+                let statuses = status_for_store(&store, validation_log);
+
+                if let Some(claim) = store.provenance_claim() {
+                    // if the parent claim is valid and has a thumbnail, use it
+                    if statuses.is_empty() {
+                        // search claim to find a claim thumbnail assertion without knowing the format
+                        if let Some(claim_assertion) = claim
+                            .claim_assertion_store()
+                            .iter()
+                            .find(|ca| ca.label_raw().starts_with(labels::CLAIM_THUMBNAIL))
+                        {
+                            let (format, image) =
+                                Self::thumbnail_from_assertion(claim_assertion.assertion());
+                            self.set_thumbnail(format, image)?;
+                        }
+                    }
+                    self.active_manifest = Some(claim.label().to_string());
+                }
+
+                if let Some(bytes) = manifest_bytes {
+                    self.set_manifest_data(bytes)?;
+                }
+
+                self.validation_status = if statuses.is_empty() {
+                    None
+                } else {
+                    Some(statuses)
+                };
+                Ok(())
+            }
+            Err(Error::JumbfNotFound)
+            | Err(Error::ProvenanceMissing)
+            | Err(Error::UnsupportedType) => Ok(()), // no claims but valid file
+            Err(Error::BadParam(desc)) if desc == *"unrecognized file type" => Ok(()),
+            Err(e) => {
+                // we can ignore the error here because it should have a log entry corresponding to it
+                debug!("ingredient {:?}", e);
+                // convert any other error to a validation status
+                let statuses: Vec<ValidationStatus> = validation_log
+                    .get_log()
+                    .iter()
+                    .filter_map(ValidationStatus::from_validation_item)
+                    .filter(|s| !validation_status::is_success(s.code()))
+                    .collect();
+                self.validation_status = if statuses.is_empty() {
+                    None
+                } else {
+                    Some(statuses)
+                };
+                Ok(())
+            }
+        }
+    }
+
     /// Creates an `Ingredient` from a file path and options.
     #[cfg(feature = "file_io")]
     pub fn from_file_with_options<P: AsRef<Path>>(
@@ -459,9 +526,6 @@ impl Ingredient {
     // Internal implementation to avoid code bloat.
     #[cfg(feature = "file_io")]
     fn from_file_impl(path: &Path, options: &dyn IngredientOptions) -> Result<Self> {
-        // these are declared inside this function in order to isolate them for wasm builds
-        use crate::status_tracker::{log_item, DetailedStatusTracker, StatusTracker};
-
         #[cfg(feature = "diagnostics")]
         let _t = crate::utils::time_it::TimeIt::new("Ingredient:from_file_with_options");
 
@@ -494,6 +558,7 @@ impl Ingredient {
         let (result, manifest_bytes) = match Store::load_jumbf_from_path(path) {
             Ok(manifest_bytes) => {
                 (
+                    // generate a store from the buffer and then validate from the asset path
                     Store::from_jumbf(&manifest_bytes, &mut validation_log)
                         .and_then(|mut store| {
                             // verify the store
@@ -515,60 +580,8 @@ impl Ingredient {
             Err(err) => (Err(err), None),
         };
 
-        // generate a store from the buffer and then validate from the asset path
-        // load and verify store in single call - no need to call low level jumbf_io functions
-        match result {
-            Ok(store) => {
-                // generate ValidationStatus from ValidationItems filtering for only errors
-                let statuses = status_for_store(&store, &mut validation_log);
-
-                if let Some(claim) = store.provenance_claim() {
-                    // if the parent claim is valid and has a thumbnail, use it
-                    if statuses.is_empty() {
-                        // search claim to find a claim thumbnail assertion without knowing the format
-                        if let Some(claim_assertion) = claim
-                            .claim_assertion_store()
-                            .iter()
-                            .find(|ca| ca.label_raw().starts_with(labels::CLAIM_THUMBNAIL))
-                        {
-                            let (format, image) =
-                                Self::thumbnail_from_assertion(claim_assertion.assertion());
-                            ingredient.set_thumbnail(format, image)?;
-                        }
-                    }
-                    ingredient.active_manifest = Some(claim.label().to_string());
-                }
-                if let Some(bytes) = manifest_bytes {
-                    ingredient.set_manifest_data(bytes)?;
-                }
-
-                ingredient.validation_status = if statuses.is_empty() {
-                    None
-                } else {
-                    Some(statuses)
-                };
-            }
-            Err(Error::JumbfNotFound)
-            | Err(Error::ProvenanceMissing)
-            | Err(Error::UnsupportedType) => {} // no claims but valid file
-            Err(Error::BadParam(desc)) if desc == *"unrecognized file type" => {}
-            Err(e) => {
-                // we can ignore the error here because it should have a log entry corresponding to it
-                debug!("ingredient {:?}", e);
-                // convert any other error to a validation status
-                let statuses: Vec<ValidationStatus> = validation_log
-                    .get_log()
-                    .iter()
-                    .filter_map(ValidationStatus::from_validation_item)
-                    .filter(|s| !validation_status::is_success(s.code()))
-                    .collect();
-                ingredient.validation_status = if statuses.is_empty() {
-                    None
-                } else {
-                    Some(statuses)
-                };
-            }
-        }
+        // set validation status from result and log
+        ingredient.update_validation_status(result, manifest_bytes, &mut validation_log)?;
 
         // create a thumbnail if we don't already have a manifest with a thumb we can use
         if ingredient.thumbnail.is_none() {
@@ -576,7 +589,70 @@ impl Ingredient {
                 ingredient.set_thumbnail(format, image)?;
             }
         }
+        Ok(ingredient)
+    }
 
+    /// Creates an `Ingredient` from a stream.
+    ///
+    /// This does not set title or hash
+    /// Thumbnail will be set only if one can be retrieved from a previous valid manifest
+    pub fn from_stream(format: &str, stream: &mut dyn CAIRead) -> Result<Self> {
+        fn make_id(id_type: &str) -> String {
+            let uuid = Uuid::new_v4();
+            format!("xmp:{id_type}id:{uuid}")
+        }
+
+        let xmp_info = XmpInfo::from_source(stream, format);
+
+        let title = "untitled";
+        // instance id is required so generate one if we don't have one
+        let instance_id = xmp_info.instance_id.unwrap_or_else(|| make_id("i"));
+
+        let mut ingredient = Self::new(title, format, instance_id.as_str());
+        ingredient.document_id = xmp_info.document_id; // use document id if one exists
+        ingredient.provenance = xmp_info.provenance;
+
+        // optionally generate a hash so we know if the file has changed
+        //ingredient.hash = options.hash(path);
+
+        let mut validation_log = DetailedStatusTracker::new();
+
+        // retrieve the manifest bytes from embedded, sidecar or remote and convert to store if found
+        let (result, manifest_bytes) = match load_jumbf_from_stream(format, stream) {
+            Ok(manifest_bytes) => {
+                (
+                    // generate a store from the buffer and then validate from the asset path
+                    Store::from_jumbf(&manifest_bytes, &mut validation_log)
+                        //.and_then(|store| {
+                        // todo:: add verify from stream
+                        // verify the store
+                        // store
+                        //     .verify_from_stream(stream, &mut validation_log)
+                        //     .map(|_| store)
+                        //})
+                        .map_err(|e| {
+                            // add a log entry for the error so we act like verify
+                            validation_log.log_silent(
+                                log_item!("asset", "error loading file", "Ingredient::from_file")
+                                    .set_error(&e),
+                            );
+                            e
+                        }),
+                    Some(manifest_bytes),
+                )
+            }
+            Err(err) => (Err(err), None),
+        };
+
+        // set validation status from result and log
+        ingredient.update_validation_status(result, manifest_bytes, &mut validation_log)?;
+
+        // create a thumbnail if we don't already have a manifest with a thumb we can use
+        // if ingredient.thumbnail.is_none() {
+        //     if let Some((format, image)) = options.thumbnail(path) {
+        //         ingredient.set_thumbnail(format, image)?;
+        //     }
+        // }
         Ok(ingredient)
     }
 
@@ -854,9 +930,16 @@ mod tests {
     #![allow(clippy::expect_used)]
     #![allow(clippy::unwrap_used)]
 
+    #[cfg(target_arch = "wasm32")]
+    use wasm_bindgen_test::*;
+
     use super::*;
     use crate::assertions::Metadata;
 
+    #[cfg(target_arch = "wasm32")]
+    wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
+
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
     #[test]
     fn test_ingredient_api() {
         let mut ingredient = Ingredient::new("title", "format", "instance_id");
@@ -1107,7 +1190,7 @@ mod tests_file_io {
 
     #[test]
     #[cfg(feature = "file_io")]
-    fn test_crate_file_based_ingredient() {
+    fn test_file_based_ingredient() {
         let mut folder = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         folder.push("tests/fixtures");
         let mut ingredient = Ingredient::new("title", "format", "instance_id");

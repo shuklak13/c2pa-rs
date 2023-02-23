@@ -20,6 +20,10 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
+#[cfg(all(feature = "async_signer", feature = "file_io"))]
+use crate::AsyncSigner;
+#[cfg(feature = "sign")]
+use crate::Signer;
 use crate::{
     assertion::{AssertionBase, AssertionData},
     assertions::{labels, Actions, CreativeWork, Exif, Thumbnail, User, UserCbor},
@@ -31,10 +35,8 @@ use crate::{
     store::Store,
     Ingredient, ManifestAssertion, ManifestAssertionKind,
 };
-#[cfg(feature = "sign")]
-use crate::{asset_io::CAIReadWrite, Signer};
-#[cfg(all(feature = "async_signer", feature = "file_io"))]
-use crate::{AsyncSigner, RemoteSigner};
+#[cfg(feature = "add_manifest")]
+use crate::{asset_io::CAIReadWrite, RemoteSigner};
 
 /// A Manifest represents all the information in a c2pa manifest
 #[derive(Debug, Default, Deserialize, Serialize)]
@@ -904,6 +906,37 @@ impl Manifest {
         // sign and write our store to to the output image file
         store.save_to_stream(format, stream, signer)
     }
+    /// Embed a signed manifest into a stream using a supplied signer.
+    /// returns the bytes of the  manifest that was embedded
+    #[cfg(feature = "add_manifest")]
+    pub async fn embed_stream_remote_signed(
+        &mut self,
+        format: &str,
+        stream: &mut dyn CAIReadWrite,
+        signer: &dyn RemoteSigner,
+    ) -> Result<Vec<u8>> {
+        self.set_format(format);
+        // todo:: read instance_id from xmp from stream
+        self.set_instance_id(format!("xmp:iid:{}", Uuid::new_v4()));
+
+        // generate thumbnail if we don't already have one
+        // if self.thumbnail().is_none() {
+        //     #[cfg(feature = "add_thumbnails")]
+        //     if let Ok((format, image)) =
+        //         crate::utils::thumbnail::make_thumbnail_from_stream(format, stream)
+        //     {
+        //         self.set_thumbnail(format, image)?;
+        //     }
+        // }
+
+        // convert the manifest to a store
+        let mut store = self.to_store()?;
+
+        // sign and write our store to to the output image file
+        store
+            .save_to_stream_remote_signed(format, stream, signer)
+            .await
+    }
 
     /// Embed a signed manifest into the target file using a supplied [`AsyncSigner`].
     #[cfg(feature = "file_io")]
@@ -969,8 +1002,13 @@ pub(crate) mod tests {
     #![allow(clippy::expect_used)]
     #![allow(clippy::unwrap_used)]
 
+    #[cfg(feature = "add_manifest")]
+    use std::io::Seek;
+
     #[cfg(feature = "file_io")]
     use tempfile::tempdir;
+    #[cfg(target_arch = "wasm32")]
+    use wasm_bindgen_test::*;
 
     #[cfg(feature = "sign")]
     use crate::utils::test::temp_signer;
@@ -989,6 +1027,9 @@ pub(crate) mod tests {
         utils::test::TEST_VC,
         Manifest, Result,
     };
+
+    #[cfg(target_arch = "wasm32")]
+    wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 
     // example of random data structure as an assertion
     #[derive(serde::Serialize)]
@@ -1250,6 +1291,7 @@ pub(crate) mod tests {
         ));
     }
 
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
     #[test]
     fn manifest_assertion_instances() {
         let mut manifest = Manifest::new("test".to_owned());
@@ -1623,5 +1665,89 @@ pub(crate) mod tests {
             .set_thumbnail_ref(ResourceRef::new("image/jpg", "C.jpg"))
             .is_ok());
         assert!(manifest.thumbnail_ref().is_some());
+    }
+
+    #[cfg(feature = "add_manifest")]
+    #[cfg_attr(not(target_arch = "wasm32"), actix::test)]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
+    async fn _test_embed_stream_remote_signed() {
+        use crate::assertions::User;
+        struct MyRemoteSigner {}
+
+        #[async_trait::async_trait]
+        impl crate::signer::RemoteSigner for MyRemoteSigner {
+            async fn sign_remote(&self, _claim_bytes: &[u8]) -> Result<Vec<u8>> {
+                Ok(vec![0; self.reserve_size()])
+            }
+            fn reserve_size(&self) -> usize {
+                1000
+            }
+        }
+        use std::io::{Cursor, SeekFrom};
+        // #[cfg(target_arch = "wasm32")]
+        // use console_log;
+        #[cfg(target_arch = "wasm32")]
+        console_log::init_with_level(log::Level::Debug).expect("init log");
+
+        // convert buffer to cursor with Read/Write/Seek capability
+        let image = include_bytes!("../tests/fixtures/earth_apollo17.jpg");
+        let image_buf = image.to_vec(); // Vec::new();
+        let image_size = image_buf.len();
+        let mut stream = Cursor::new(image_buf);
+
+        log::debug!(
+            "stream len begin = {}",
+            stream.seek(SeekFrom::End(0)).unwrap()
+        );
+        let mut manifest = Manifest::new("my_app".to_owned());
+        manifest.set_title("EmbedStreamRemote");
+        manifest
+            .add_assertion(&User::new(
+                "org.contentauth.mylabel",
+                r#"{"my_tag":"Anything I want"}"#,
+            ))
+            .unwrap();
+
+        manifest
+            .set_thumbnail("jpeg", *image)
+            .expect("set thumbnail");
+        let signer = MyRemoteSigner {};
+        // Embed a manifest using the signer.
+        manifest
+            .embed_stream_remote_signed("image/jpeg", &mut stream, &signer)
+            .await
+            .expect("embed_stream");
+        log::debug!(
+            "stream len after embed = {}",
+            stream.seek(SeekFrom::End(0)).unwrap()
+        );
+        // get the updated image
+        stream.rewind().expect("rewind");
+        let image = stream.into_inner();
+        log::debug!("image len after ={}, before={}", image.len(), image_size);
+        let manifest_store =
+            crate::ManifestStore::from_bytes("image/jpeg", &image, true).expect("from_bytes");
+        assert_eq!(
+            manifest_store.get_active().unwrap().title().unwrap(),
+            "EmbedStreamRemote"
+        );
+        #[cfg(feature = "add_thumbnails")]
+        assert!(manifest_store.get_active().unwrap().thumbnail().is_some());
+        println!("{manifest_store}");
+    }
+
+    //#[cfg(feature = "add_manifest")]
+    #[cfg_attr(not(target_arch = "wasm32"), actix::test)]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
+    async fn test_cursor() {
+        use std::io::{Seek, SeekFrom, Write};
+        let data = vec![0u8; 5]; // or say Vec<u8> = Vec::with_capacity(100);
+        let mut stream = std::io::Cursor::new(data.to_vec());
+        stream.write_all("some data".as_bytes()).expect("write_all");
+        stream.rewind().unwrap();
+        stream.write_all("some data".as_bytes()).expect("write_all");
+        let len = stream.seek(SeekFrom::End(0)).unwrap();
+        log::debug!("stream len after embed = {}", len);
+        assert_eq!(len, 9);
     }
 }

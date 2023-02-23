@@ -118,12 +118,12 @@ pub(crate) mod ocsp_utils;
 #[cfg(feature = "sign")]
 mod openssl;
 
-#[cfg(feature = "sign")]
 mod signer;
+#[cfg(feature = "async_signer")]
+pub use signer::AsyncSigner;
+pub use signer::RemoteSigner;
 #[cfg(feature = "sign")]
 pub use signer::Signer;
-#[cfg(feature = "async_signer")]
-pub use signer::{AsyncSigner, RemoteSigner};
 #[allow(dead_code, clippy::enum_variant_names)]
 pub(crate) mod asn1;
 pub(crate) mod assertion;
@@ -146,8 +146,6 @@ pub(crate) mod store;
 pub(crate) mod time_stamp;
 pub(crate) mod utils;
 pub mod validation_status;
-#[cfg(feature = "file_io")]
-pub(crate) use utils::xmp_inmemory_utils;
 pub(crate) use utils::{cbor_types, hash_utils};
 pub(crate) mod validator;
 #[cfg(target_arch = "wasm32")]

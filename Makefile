@@ -29,7 +29,8 @@ test-no-defaults:
 	cd sdk && cargo test --features="file_io, xmp_write, bmff" --no-default-features 
 
 test-wasm:
-	cd sdk && wasm-pack test --node
+	cd sdk && wasm-pack test --chrome --headless -- --features="add_manifest"
+#   cd sdk && wasm-pack test --node
 
 # Full local validation, build and test all features including wasm
 # Run this before pushing a PR to pre-validate

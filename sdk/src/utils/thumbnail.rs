@@ -14,7 +14,7 @@
 use image::{io::Reader, ImageFormat};
 
 use crate::Result;
-#[cfg(feature = "sign")]
+#[cfg(feature = "add_manifest")]
 use crate::{asset_io::CAIReadWrite, Error};
 
 // max edge size allowed in pixels for thumbnail creation
@@ -52,7 +52,7 @@ pub fn make_thumbnail(path: &std::path::Path) -> Result<(String, Vec<u8>)> {
 
 ///  utility to generate a thumbnail from a file at path
 /// returns Result (format, image_bits) if successful, otherwise Error
-#[cfg(feature = "sign")]
+#[cfg(feature = "add_manifest")]
 pub fn make_thumbnail_from_stream(
     format: &str,
     stream: &mut dyn CAIReadWrite,

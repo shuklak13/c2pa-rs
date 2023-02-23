@@ -11,7 +11,7 @@
 // specific language governing permissions and limitations under
 // each license.
 
-#[cfg(feature = "sign")]
+#[cfg(feature = "add_manifest")]
 use std::io::SeekFrom;
 use std::{collections::HashMap, io::Cursor};
 #[cfg(feature = "file_io")]
@@ -44,15 +44,12 @@ use crate::{
     utils::hash_utils::hash256,
     validation_status, ManifestStoreReport,
 };
-#[cfg(feature = "sign")]
+#[cfg(feature = "add_manifest")]
 use crate::{
     assertions::DataHash,
     asset_io::{CAIReadWrite, HashBlockObjectType, HashObjectPositions},
-    cose_sign::cose_sign,
-    cose_validator::verify_cose,
     jumbf_io::{object_locations_from_stream, save_jumbf_to_stream},
     utils::{hash_utils::Exclusion, patch::patch_bytes},
-    Signer,
 };
 #[cfg(feature = "file_io")]
 use crate::{
@@ -63,6 +60,8 @@ use crate::{
         object_locations, remove_jumbf_from_file, save_jumbf_to_file,
     },
 };
+#[cfg(feature = "sign")]
+use crate::{cose_sign::cose_sign, cose_validator::verify_cose, Signer};
 
 const MANIFEST_STORE_EXT: &str = "c2pa"; // file extension for external manifests
 
@@ -622,7 +621,7 @@ impl Store {
         self.to_jumbf_internal(signer.reserve_size())
     }
 
-    #[cfg(feature = "sign")]
+    #[cfg(feature = "add_manifest")]
     fn to_jumbf_internal(&self, min_reserve_size: usize) -> Result<Vec<u8>> {
         // Create the CAI block.
         let mut cai_block = Cai::new();
@@ -1336,7 +1335,7 @@ impl Store {
     }
 
     // generate a list of AssetHashes based on the location of objects in the stream
-    #[cfg(feature = "sign")]
+    #[cfg(feature = "add_manifest")]
     fn generate_data_hashes_for_stream(
         stream: &mut dyn CAIReadWrite,
         alg: &str,
@@ -1559,6 +1558,43 @@ impl Store {
         }
     }
 
+    //#[cfg(feature = "async_signer")]
+    #[cfg(feature = "add_manifest")]
+    pub async fn save_to_stream_remote_signed(
+        &mut self,
+        format: &str,
+        stream: &mut dyn CAIReadWrite,
+        signer: &dyn crate::signer::RemoteSigner,
+    ) -> Result<Vec<u8>> {
+        let jumbf_bytes = self.start_save_stream(format, stream, signer.reserve_size())?;
+        //log::debug!("start save size= {}",jumbf_bytes.len());
+        log::debug!(
+            "stream len after start = {}",
+            stream.seek(SeekFrom::End(0))?
+        );
+        let pc = self.provenance_claim().ok_or(Error::ClaimEncoding)?;
+        let sig = signer.sign_remote(&pc.data()?).await?;
+        log::debug!("sig size= {}", sig.len());
+        let sig_placeholder = Store::sign_claim_placeholder(pc, signer.reserve_size());
+        log::debug!("sig_placeholder size= {}", sig_placeholder.len());
+        match self.finish_save_stream(jumbf_bytes, format, stream, sig, &sig_placeholder) {
+            Ok((signature, manifest)) => {
+                //log::debug!("start save size= {}",jumbf_bytes.len());
+                log::debug!(
+                    "stream len after finish = {}",
+                    stream.seek(SeekFrom::End(0))?
+                );
+                log::debug!("manifest= {}", manifest.len());
+                // save sig so store is up to date
+                let pc_mut = self.provenance_claim_mut().ok_or(Error::ClaimEncoding)?;
+                pc_mut.set_signature_val(signature);
+
+                Ok(manifest)
+            }
+            Err(e) => Err(e),
+        }
+    }
+
     /// Embed the claims store as jumbf into an asset. Updates XMP with provenance record.
     #[cfg(feature = "file_io")]
     pub fn save_to_asset(
@@ -1727,7 +1763,7 @@ impl Store {
         }
     }
 
-    #[cfg(feature = "sign")]
+    #[cfg(feature = "add_manifest")]
     fn start_save_stream(
         &mut self,
         format: &str,
@@ -1742,12 +1778,16 @@ impl Store {
 
         // 2) Get hash ranges if needed, do not generate for update manifests
         let mut hash_ranges = object_locations_from_stream(format, stream)?;
+        log::debug!(
+            "stream len after object locations = {}",
+            stream.seek(SeekFrom::End(0))?
+        );
         let hashes: Vec<DataHash> = if pc.update_manifest() {
             Vec::new()
         } else {
             Store::generate_data_hashes_for_stream(stream, pc.alg(), &mut hash_ranges, false)?
         };
-
+        log::debug!("stream len after data = {}", stream.seek(SeekFrom::End(0))?);
         // add the placeholder data hashes to provenance claim so that the required space is reserved
         for mut hash in hashes {
             // add padding to account for possible cbor expansion of final DataHash
@@ -1763,7 +1803,10 @@ impl Store {
         data = self.to_jumbf_internal(reserve_size)?;
         let jumbf_size = data.len();
         save_jumbf_to_stream(format, stream, &data)?;
-
+        log::debug!(
+            "stream len after save_jumbf = {}",
+            stream.seek(SeekFrom::End(0))?
+        );
         // 4)  determine final object locations and patch the asset hashes with correct offset
         // replace the source with correct asset hashes so that the claim hash will be correct
         let pc = self.provenance_claim_mut().ok_or(Error::ClaimEncoding)?;
@@ -1790,7 +1833,7 @@ impl Store {
         Ok(data) // return JUMBF data
     }
 
-    #[cfg(feature = "sign")]
+    #[cfg(feature = "add_manifest")]
     fn finish_save_stream(
         &self,
         mut jumbf_bytes: Vec<u8>,

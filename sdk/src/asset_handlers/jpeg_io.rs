@@ -289,7 +289,7 @@ impl CAIWriter for JpegIO {
         stream.rewind()?;
         jpeg.encoder()
             .write_to(stream)
-            .map_err(|_err| Error::InvalidAsset("JPEG write error".to_owned()))?;
+            .map_err(|_err| Error::InvalidAsset(_err.to_string()))?;
         Ok(())
     }
 

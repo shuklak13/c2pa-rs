@@ -55,7 +55,7 @@ impl HashedUri {
         self.hash.clone()
     }
 
-    #[cfg(feature = "sign")]
+    #[cfg(feature = "add_manifest")]
     pub(crate) fn update_hash(&mut self, hash: Vec<u8>) {
         self.hash = hash;
     }
