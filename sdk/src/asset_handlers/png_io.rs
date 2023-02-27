@@ -18,7 +18,9 @@ use std::{
 };
 
 use byteorder::{BigEndian, ReadBytesExt};
+use bytes::Bytes;
 use conv::ValueFrom;
+use img_parts::png::{Png, PngChunk};
 
 use crate::{
     asset_io::{
@@ -31,6 +33,7 @@ use crate::{
 const PNG_ID: [u8; 8] = [137, 80, 78, 71, 13, 10, 26, 10];
 const CAI_CHUNK: [u8; 4] = *b"caBX";
 const IMG_HDR: [u8; 4] = *b"IHDR";
+const ITXT_CHUNK: [u8; 4] = *b"iTXt";
 const XMP_KEY: &str = "XML:com.adobe.xmp";
 const PNG_END: [u8; 4] = *b"IEND";
 const PNG_HDR_LEN: u64 = 12;
@@ -399,6 +402,44 @@ impl CAIWriter for PngIO {
 
         Ok(positions)
     }
+
+    fn write_xmp(&self, stream: &mut dyn CAIReadWrite, xmp_bytes: Option<&str>) -> Result<()> {
+        let mut buf = Vec::new();
+        stream.rewind()?;
+        stream.read_to_end(&mut buf).map_err(Error::IoError)?;
+
+        let mut png = Png::from_bytes(buf.into()).map_err(|_| Error::EmbeddingError)?;
+        let png_chunks = png.chunks_mut();
+
+        // remove stream's current xmp chunks
+        png_chunks.retain(|chunk| {
+            !(chunk.kind() == ITXT_CHUNK && chunk.contents().starts_with(&Bytes::from(XMP_KEY)))
+        });
+
+        if let Some(xmp) = xmp_bytes {
+            const KEY_BREAK: &str = "\0";
+            const COMPRESSED: &str = "\0";
+            const COMPRESSION_METHOD: &str = "\0";
+            const LANG_TAG: &str = "\0";
+            const TRANS_KEY: &str = "\0";
+
+            let xmp_chunk = PngChunk::new(
+                ITXT_CHUNK,
+                Bytes::from(format!(
+                    "{}{}{}{}{}{}{}",
+                    XMP_KEY, KEY_BREAK, COMPRESSED, COMPRESSION_METHOD, LANG_TAG, TRANS_KEY, xmp
+                )),
+            );
+            png_chunks.insert(png_chunks.len() - 1, xmp_chunk);
+        }
+
+        stream.rewind()?;
+        png.encoder()
+            .write_to(stream)
+            .map_err(|_| Error::EmbeddingError)?;
+
+        Ok(())
+    }
 }
 
 impl AssetIO for PngIO {
@@ -494,6 +535,7 @@ pub mod tests {
 
         assert!(provenance.contains("libpng-test"));
     }
+
     #[test]
     fn test_png_parse() {
         let ap = test::fixture_path("libpng-test.png");
@@ -517,6 +559,58 @@ pub mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn test_write_xmp_to_png_with_xmp() {
+        let source = include_bytes!("../../tests/fixtures/libpng-test_with_url.png");
+        let mut stream = Cursor::new(source.to_vec());
+        let png_io = PngIO {};
+
+        // iTXt XMP chunk exists in stream
+        assert_ne!(png_io.read_xmp(&mut stream), Some("xmp".to_owned()));
+        png_io.write_xmp(&mut stream, Some("xmp")).unwrap();
+        // expected xmp data is present
+        assert_eq!(png_io.read_xmp(&mut stream), Some("xmp".to_owned()));
+    }
+
+    #[test]
+    fn test_write_no_xmp_to_png_with_xmp() {
+        let source = include_bytes!("../../tests/fixtures/libpng-test_with_url.png");
+        let mut stream = Cursor::new(source.to_vec());
+        let png_io = PngIO {};
+
+        // iTXt XMP chunk exists in stream
+        assert!(png_io.read_xmp(&mut stream).is_some());
+        png_io.write_xmp(&mut stream, None).unwrap();
+        // passing `None` overwrites current iTXt XMP chunk
+        assert!(png_io.read_xmp(&mut stream).is_none());
+    }
+
+    #[test]
+    fn test_write_xmp_to_png_without_xmp() {
+        let source = include_bytes!("../../tests/fixtures/libpng-test.png");
+        let mut stream = Cursor::new(source.to_vec());
+        let png_io = PngIO {};
+
+        // iTXt XMP chunk does not exist in stream
+        assert!(png_io.read_xmp(&mut stream).is_none());
+        png_io.write_xmp(&mut stream, Some("xmp")).unwrap();
+        // iTXt Xmp chunk is embedded
+        assert_eq!(png_io.read_xmp(&mut stream), Some("xmp".to_owned()));
+    }
+
+    #[test]
+    fn test_write_no_xmp_to_png_without_xmp() {
+        let source = include_bytes!("../../tests/fixtures/libpng-test.png");
+        let mut stream = Cursor::new(source.to_vec());
+        let png_io = PngIO {};
+
+        // iTXt XMP chunk exists in stream
+        assert!(png_io.read_xmp(&mut stream).is_none());
+        png_io.write_xmp(&mut stream, None).unwrap();
+        // passing `None` overwrites current iTXt xmp chunk
+        assert!(png_io.read_xmp(&mut stream).is_none());
     }
 
     #[test]
