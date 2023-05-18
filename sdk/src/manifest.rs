@@ -1569,6 +1569,13 @@ pub(crate) mod tests {
         )
         .await
         .unwrap();
+
+        log::info!(
+            "ingredient validation status: {:?}",
+            ingredient.validation_status()
+        );
+        assert_eq!(ingredient.validation_status().unwrap().len(), 0);
+
         manifest.set_title("EmbedStream");
         manifest
             .add_assertion(&User::new(
