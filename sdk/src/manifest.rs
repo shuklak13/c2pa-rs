@@ -1552,7 +1552,9 @@ pub(crate) mod tests {
 
     #[cfg_attr(not(target_arch = "wasm32"), actix::test)]
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
-    async fn test_embed_remote_ingredient_wasm() {
+    async fn test_embed_remote_ingredient() {
+        #[cfg(target_arch = "wasm32")]
+        console_log::init_with_level(log::Level::Info).expect("error initializing log");
         use crate::assertions::User;
         let image = include_bytes!("../tests/fixtures/libpng-test.png");
         let ingredient_bytes = include_bytes!("../tests/fixtures/cloud-only-firefly.jpg");
@@ -1561,7 +1563,7 @@ pub(crate) mod tests {
 
         let mut manifest = Manifest::new("my_app".to_owned());
         let ingredient = Ingredient::from_manifest_and_asset_bytes_async(
-            manifest_bytes.to_owned(),
+            manifest_bytes.to_vec(),
             "image/jpeg",
             ingredient_bytes,
         )
@@ -1586,6 +1588,8 @@ pub(crate) mod tests {
 
         // try to load the image
         let manifest_store = crate::ManifestStore::from_bytes("image/png", &out_vec, true).unwrap();
+        let ingredients = manifest_store.get_active().unwrap().ingredients();
+        let remote_ingredient = ingredients.get(0).unwrap();
 
         /* to be enabled later
                 // try to load the manifest
@@ -1593,7 +1597,11 @@ pub(crate) mod tests {
                 Store::from_jumbf(&out_manifest, &mut validation_log).expect("manifest_load_error");
         */
 
-        println!("It worked: {manifest_store}\n");
+        log::info!(
+            "remote_ingredient validation status: {:?}",
+            remote_ingredient.validation_status()
+        );
+        assert_eq!(remote_ingredient.validation_status().unwrap().len(), 0);
     }
 
     #[test]
