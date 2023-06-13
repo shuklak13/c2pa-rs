@@ -436,7 +436,11 @@ impl Ingredient {
     /// Sets the Manifest C2PA data for this ingredient with bytes
     pub fn set_manifest_data(&mut self, data: Vec<u8>) -> Result<&mut Self> {
         let base_id = self.instance_id().to_string();
-        self.manifest_data = Some(self.resources.add_with(&base_id, "c2pa", data)?);
+        self.manifest_data = Some(self.resources.add_with(
+            &base_id,
+            "application/x-c2pa-manifest-store",
+            data,
+        )?);
         Ok(self)
     }
 
@@ -1355,6 +1359,14 @@ mod tests {
         assert_eq!(
             ingredient.validation_status().unwrap()[0].code(),
             "status_code"
+        );
+        assert_eq!(
+            ingredient.manifest_data_ref().unwrap().format.as_str(),
+            "application/x-c2pa-manifest-store"
+        );
+        assert_eq!(
+            ingredient.manifest_data().unwrap().into_owned(),
+            "data".as_bytes().to_vec()
         );
     }
 
