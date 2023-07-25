@@ -791,7 +791,8 @@ impl Manifest {
                         .enumerate()
                         .filter_map(|(i, a)| {
                             if a.instance_id().is_some()
-                                && a.get_parameter(ingredients_key).is_none()
+                                || a.get_parameter("ingredient_ids").is_some()
+                                    && a.get_parameter(ingredients_key).is_none()
                             {
                                 Some((i, a.clone()))
                             } else {
@@ -800,16 +801,33 @@ impl Manifest {
                         })
                         .collect();
 
-                    dbg!(&needs_ingredient);
                     for (index, action) in needs_ingredient {
-                        if let Some(id) = action.instance_id() {
+                        if let Some(ingredient_ids) = action.get_parameter("ingredient_ids") {
+                            // convert ingredient_ids to ingredient uris
+                            let mut ingredients = Vec::new();
+                            if let serde_cbor::Value::Array(ids) = ingredient_ids {
+                                for id in ids {
+                                    if let serde_cbor::Value::Text(id) = id {
+                                        if let Some(hash_uri) = ingredient_map.get(id.as_str()) {
+                                            ingredients.push(hash_uri.clone());
+                                        } else {
+                                            // todo: should this be an error?
+                                            error!("ingredient id not found {}", id);
+                                        }
+                                    }
+                                }
+                            };
+                            // add all matching ingredients to the action
+                            let update = action.set_parameter(ingredients_key, ingredients)?;
+                            actions = actions.update_action(index, update);
+                        } else if let Some(id) = action.instance_id() {
                             if let Some(hash_url) = ingredient_map.get(id) {
                                 let update = match ingredients_key {
                                     "ingredient" => {
                                         action.set_parameter(ingredients_key, hash_url.clone())
                                     }
                                     _ => {
-                                        // we only support on instanceId for actions, so only one ingredient on writing
+                                        // we only support one instanceId for actions, so only one ingredient on writing
                                         action.set_parameter(ingredients_key, [hash_url.clone()])
                                     }
                                 }?;
