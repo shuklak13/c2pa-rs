@@ -18,17 +18,18 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// Hashed Uri structure as defined by C2PA spec
-/// It is annotated to produce the correctly tagged cbor serialization
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "json_schema", derive(JsonSchema))]
 pub struct HashedUri {
-    url: String, // URI stored as tagged cbor
+    /// URI reference to data in the manifest
+    url: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Algorithm used to generate hash
     alg: Option<String>,
+    /// Hash of data referenced by the URI
     #[serde(with = "serde_bytes")]
     #[cfg_attr(feature = "json_schema", schemars(with = "Vec<u8>"))]
-    hash: Vec<u8>, // hash stored as cbor byte string
-
+    hash: Vec<u8>,
     // salt used to generate hash
     #[serde(skip_deserializing, skip_serializing)]
     salt: Option<Vec<u8>>,
