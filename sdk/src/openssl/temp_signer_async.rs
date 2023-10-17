@@ -18,26 +18,56 @@
 //! This is only a demonstration async Signer that is used to test
 //! the asynchronous signing of claims.
 //! This module should be used only for testing purposes.
+#![allow(clippy::panic)]
+#![allow(clippy::unwrap_used)]
 
 #[cfg(feature = "openssl_sign")]
 use crate::SigningAlg;
 
 #[cfg(feature = "openssl_sign")]
 fn get_local_signer(alg: SigningAlg) -> Box<dyn crate::Signer> {
-    let cert_dir = crate::utils::test::fixture_path("certs");
+    use super::{EcSigner, EdSigner, RsaSigner};
+    use crate::signer::ConfigurableSigner;
 
+    let (certs, pkey) = match alg {
+        SigningAlg::Ps256 => (
+            include_bytes!("../../tests/fixtures/certs/ps256.pub") as &[u8],
+            include_bytes!("../../tests/fixtures/certs/ps256.pem") as &[u8],
+        ),
+        SigningAlg::Ps384 => (
+            include_bytes!("../../tests/fixtures/certs/ps384.pub") as &[u8],
+            include_bytes!("../../tests/fixtures/certs/ps384.pem") as &[u8],
+        ),
+        SigningAlg::Ps512 => (
+            include_bytes!("../../tests/fixtures/certs/ps512.pub") as &[u8],
+            include_bytes!("../../tests/fixtures/certs/ps512.pem") as &[u8],
+        ),
+        SigningAlg::Es256 => (
+            include_bytes!("../../tests/fixtures/certs/es256.pub") as &[u8],
+            include_bytes!("../../tests/fixtures/certs/es256.pem") as &[u8],
+        ),
+        SigningAlg::Es384 => (
+            include_bytes!("../../tests/fixtures/certs/es384.pub") as &[u8],
+            include_bytes!("../../tests/fixtures/certs/es384.pem") as &[u8],
+        ),
+        SigningAlg::Es512 => (
+            include_bytes!("../../tests/fixtures/certs/es512.pub") as &[u8],
+            include_bytes!("../../tests/fixtures/certs/es512.pem") as &[u8],
+        ),
+        SigningAlg::Ed25519 => (
+            include_bytes!("../../tests/fixtures/certs/ed25519.pub") as &[u8],
+            include_bytes!("../../tests/fixtures/certs/ed25519.pem") as &[u8],
+        ),
+    };
     match alg {
         SigningAlg::Ps256 | SigningAlg::Ps384 | SigningAlg::Ps512 => {
-            let (s, _k) = super::temp_signer::get_rsa_signer(&cert_dir, alg, None);
-            Box::new(s)
+            Box::new(RsaSigner::from_signcert_and_pkey(certs, pkey, alg, None).unwrap())
         }
         SigningAlg::Es256 | SigningAlg::Es384 | SigningAlg::Es512 => {
-            let (s, _k) = super::temp_signer::get_ec_signer(&cert_dir, alg, None);
-            Box::new(s)
+            Box::new(EcSigner::from_signcert_and_pkey(certs, pkey, alg, None).unwrap())
         }
         SigningAlg::Ed25519 => {
-            let (s, _k) = super::temp_signer::get_ed_signer(&cert_dir, alg, None);
-            Box::new(s)
+            Box::new(EdSigner::from_signcert_and_pkey(certs, pkey, alg, None).unwrap())
         }
     }
 }

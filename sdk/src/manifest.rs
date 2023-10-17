@@ -1896,7 +1896,7 @@ pub(crate) mod tests {
         assert_eq!(image.into_owned(), thumb_data);
     }
 
-    #[cfg(feature = "file_io")]
+    #[cfg(feature = "openssl_sign")]
     const MANIFEST_JSON: &str = r#"{
         "claim_generator": "test",
         "claim_generator_info": [
@@ -1963,6 +1963,7 @@ pub(crate) mod tests {
             "format": "image/jpeg",
             "document_id": "xmp.did:813ee422-9736-4cdc-9be6-4e35ed8e41cb",
             "relationship": "parentOf",
+            "description": "description",
             "thumbnail": {
                 "format": "image/png",
                 "identifier": "exp-test1.png"

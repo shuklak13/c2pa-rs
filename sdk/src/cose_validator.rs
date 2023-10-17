@@ -1181,7 +1181,7 @@ pub mod tests {
     }
 
     #[test]
-    #[cfg(feature = "openssl_sign")]
+    #[cfg(feature = "file_io")]
     fn test_cert_algorithms() {
         let cert_dir = crate::utils::test::fixture_path("certs");
 
