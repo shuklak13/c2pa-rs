@@ -409,15 +409,31 @@ impl Manifest {
         }
     }
 
-    /// Redacts an assertion from the parent [Ingredient] of this manifest using the provided
-    /// assertion label.
+    /// Redacts an assertion using the provided JUMBF URI
+    /// The uri can be retrieved from a Manifest store report and should include the manifest label
+    ///
+    /// Note: if you have already added a parent ingredient the URI may be just the action label
     pub fn add_redaction<S: Into<String>>(&mut self, label: S) -> Result<&mut Self> {
-        // todo: any way to verify if this assertion exists in the parent claim here?
+        let mut uri = label.into();
+        // if we just have a label, try to build a uri to the parent manifest if one exits
+        // This avoids generating a full manifest store in order to get uri values for redactions
+        if !jumbf::labels::is_jumbf_uri(&uri) {
+            if let Some(parent_manifest) = self.parent().and_then(|p| p.active_manifest()) {
+                uri = jumbf::labels::to_assertion_uri(parent_manifest, &uri);
+            } else {
+                return Err(Error::AssertionMissing { url: uri });
+            }
+        }
         match self.redactions.as_mut() {
-            Some(redactions) => redactions.push(label.into()),
-            None => self.redactions = Some([label.into()].to_vec()),
+            Some(redactions) => redactions.push(uri),
+            None => self.redactions = Some([uri].to_vec()),
         }
         Ok(self)
+    }
+
+    /// Returns a list of any active redactions in this [Manifest]
+    pub fn redactions(&self) -> Option<&[String]> {
+        self.redactions.as_deref()
     }
 
     /// Add verifiable credentials
@@ -537,11 +553,7 @@ impl Manifest {
             manifest.credentials = Some(credentials);
         }
 
-        manifest.redactions = claim.redactions().map(|rs| {
-            rs.iter()
-                .filter_map(|r| jumbf::labels::assertion_label_from_uri(r))
-                .collect()
-        });
+        manifest.redactions = claim.redactions().cloned();
 
         if let Some(title) = claim.title() {
             manifest.set_title(title);

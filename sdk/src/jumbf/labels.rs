@@ -57,6 +57,15 @@ pub const DATABOXES: &str = "c2pa.databoxes";
 
 const JUMBF_PREFIX: &str = "self#jumbf";
 
+pub(crate) fn is_jumbf_uri(uri: &str) -> bool {
+    uri.starts_with(JUMBF_PREFIX)
+}
+
+pub(crate) fn is_absolute_jumbf_uri(uri: &str) -> bool {
+    let parts: Vec<&str> = uri.split('=').collect();
+    parts.len() == 2 && parts[0] == JUMBF_PREFIX && parts[1].starts_with("/c2pa/")
+}
+
 // Converts a manifest label to a JUMBF URI.
 pub(crate) fn to_manifest_uri(manifest_label: &str) -> String {
     format!("{JUMBF_PREFIX}=/{MANIFEST_STORE}/{manifest_label}")

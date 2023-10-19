@@ -29,10 +29,7 @@ use crate::{
     claim::{Claim, ClaimAssetData},
     error::{Error, Result},
     hashed_uri::HashedUri,
-    jumbf::{
-        self,
-        labels::{manifest_label_from_uri, to_assertion_uri},
-    },
+    jumbf::{self, labels::manifest_label_from_uri},
     jumbf_io::load_jumbf_from_stream,
     resource_store::{skip_serializing_resources, ResourceRef, ResourceStore},
     status_tracker::{log_item, DetailedStatusTracker, StatusTracker},
@@ -1025,17 +1022,6 @@ impl Ingredient {
                     .active_manifest
                     .clone()
                     .ok_or(Error::IngredientNotFound)?;
-
-                //if this is the parent ingredient then apply any redactions, converting from labels to uris
-                let redactions = match self.is_parent() {
-                    true => redactions.as_ref().map(|redactions| {
-                        redactions
-                            .iter()
-                            .map(|r| to_assertion_uri(&manifest_label, r))
-                            .collect()
-                    }),
-                    false => None,
-                };
 
                 // get the c2pa manifest bytes
                 let manifest_data = self.resources.get(&resource_ref.identifier)?;
