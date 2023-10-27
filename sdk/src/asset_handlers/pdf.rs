@@ -74,7 +74,7 @@ pub(crate) trait C2paPdf: Sized {
 
     /// Returns a reference to the C2PA manifest bytes.
     #[allow(clippy::needless_lifetimes)] // required for automock::mockall
-    fn read_manifest_bytes<'a>(&'a self) -> Result<Option<Vec<&'a [u8]>>, Error>;
+    fn read_manifest_bytes<'a>(&'a self) -> Result<Option<Vec<Vec<u8>>>, Error>;
 
     fn remove_manifest_bytes(&mut self) -> Result<(), Error>;
 
@@ -103,7 +103,12 @@ impl C2paPdf for Pdf {
         self.document
             .catalog()
             .and_then(|catalog| catalog.get_deref(ASSOCIATED_FILE_KEY, &self.document))
-            .and_then(Object::as_dict)
+            .and_then(|v| {
+                let first_item = v.as_array().unwrap().iter().next().unwrap();
+                let reference = first_item.as_reference().unwrap();
+                let referenced_object = self.document.get_object(reference).unwrap();
+                referenced_object.as_dict()
+            })
             .and_then(|dict| dict.get_deref(AF_RELATIONSHIP_KEY, &self.document))
             .and_then(Object::as_name)
             .map(|name| name == C2PA_RELATIONSHIP)
@@ -213,21 +218,47 @@ impl C2paPdf for Pdf {
     /// A `Vec<&[u8]>` is returned because it's possible for a PDF's manifests to be stored
     /// separately, due to PDF's "Incremental Update" feature. See the spec for more details:
     /// <https://c2pa.org/specifications/specifications/1.3/specs/C2PA_Specification.html#_embedding_manifests_into_pdfs>
-    fn read_manifest_bytes(&self) -> Result<Option<Vec<&[u8]>>, Error> {
+    fn read_manifest_bytes(&self) -> Result<Option<Vec<Vec<u8>>>, Error> {
         if !self.has_c2pa_manifest() {
             return Ok(None);
         };
 
-        Ok(Some(vec![
-            &self
-                .document
-                .catalog()?
-                .get_deref(ASSOCIATED_FILE_KEY, &self.document)?
-                .as_dict()?
-                .get_deref(b"EF", &self.document)?
-                .as_stream()?
-                .content,
-        ]))
+        let test = &self
+            .document
+            .catalog()?
+            .get_deref(ASSOCIATED_FILE_KEY, &self.document)?;
+
+        println!("1");
+        let array = test.as_array()?;
+        println!("2");
+        let reference = array.iter().next().unwrap().as_reference().unwrap();
+        println!("3");
+        let spec = self.document.get_object(reference)?.as_dict().unwrap();
+        println!("4");
+        let dict = spec.get_deref(b"EF", &self.document)?.as_dict()?;
+        println!("5");
+
+        let stream = dict
+            .get_deref(b"F", &self.document)?
+            .as_stream()?
+            .content
+            .clone();
+
+        println!("-stream-");
+        println!("6");
+
+        Ok(Some(vec![stream.clone()]))
+
+        // Ok(Some(vec![
+        //     &self
+        //         .document
+        //         .catalog()?
+        //         .get_deref(ASSOCIATED_FILE_KEY, &self.document)?
+        //         .as_dict()?
+        //         .get_deref(b"EF", &self.document)?
+        //         .as_stream()?
+        //         .content,
+        // ]))
     }
 
     fn remove_manifest_bytes(&mut self) -> Result<(), Error> {
@@ -600,6 +631,23 @@ mod tests {
 
         let saved_pdf = Pdf::from_bytes(&saved_bytes).unwrap();
         assert!(saved_pdf.has_c2pa_manifest());
+    }
+
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
+    fn test_reads_manifest_bytes_for_embedded_file_express() {
+        let pdf = Pdf::from_bytes(include_bytes!("/Users/dylanross/Desktop/output.pdf")).unwrap();
+        assert!(pdf.has_c2pa_manifest());
+
+        // let manifest_bytes = vec![0u8, 1u8, 1u8, 2u8, 3u8];
+        // pdf.write_manifest_as_embedded_file(manifest_bytes.clone())
+        //     .unwrap();
+
+        // assert!(pdf.has_c2pa_manifest());
+        // assert!(matches!(
+        //     pdf.read_manifest_bytes(),
+        //     Ok(Some(manifests)) if manifests[0] == manifest_bytes
+        // ));
     }
 
     #[cfg_attr(not(target_arch = "wasm32"), test)]

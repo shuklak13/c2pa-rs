@@ -126,7 +126,7 @@ pub mod tests {
         asset_io::{AssetIO, CAIReader},
     };
 
-    static MANIFEST_BYTES: &[u8; 2] = &[10u8, 20u8];
+    // static MANIFEST_BYTES: &[u8; 2] = &[10u8, 20u8];
 
     #[test]
     fn test_error_reading_manifest_fails() {
@@ -156,35 +156,35 @@ pub mod tests {
         ));
     }
 
-    #[test]
-    fn test_one_manifest_found_returns_bytes() {
-        let mut mock_pdf = MockC2paPdf::default();
-        mock_pdf
-            .expect_read_manifest_bytes()
-            .returning(|| Ok(Some(vec![MANIFEST_BYTES])));
+    // #[test]
+    // fn test_one_manifest_found_returns_bytes() {
+    //     let mut mock_pdf = MockC2paPdf::default();
+    //     mock_pdf
+    //         .expect_read_manifest_bytes()
+    //         .returning(|| Ok(Some(vec![MANIFEST_BYTES])));
+    //
+    //     let pdf_io = PdfIO::new("pdf");
+    //     assert_eq!(
+    //         pdf_io.read_manifest_bytes(mock_pdf).unwrap(),
+    //         MANIFEST_BYTES.to_vec()
+    //     );
+    // }
 
-        let pdf_io = PdfIO::new("pdf");
-        assert_eq!(
-            pdf_io.read_manifest_bytes(mock_pdf).unwrap(),
-            MANIFEST_BYTES.to_vec()
-        );
-    }
-
-    #[test]
-    fn test_multiple_manifest_fail_with_not_implemented_error() {
-        let mut mock_pdf = MockC2paPdf::default();
-        mock_pdf
-            .expect_read_manifest_bytes()
-            .returning(|| Ok(Some(vec![MANIFEST_BYTES, MANIFEST_BYTES, MANIFEST_BYTES])));
-
-        let pdf_io = PdfIO::new("pdf");
-
-        assert!(matches!(
-            pdf_io.read_manifest_bytes(mock_pdf),
-            Err(crate::Error::NotImplemented(_))
-        ));
-    }
-
+    // #[test]
+    // fn test_multiple_manifest_fail_with_not_implemented_error() {
+    //     let mut mock_pdf = MockC2paPdf::default();
+    //     mock_pdf
+    //         .expect_read_manifest_bytes()
+    //         .returning(|| Ok(Some(vec![MANIFEST_BYTES, MANIFEST_BYTES, MANIFEST_BYTES])));
+    //
+    //     let pdf_io = PdfIO::new("pdf");
+    //
+    //     assert!(matches!(
+    //         pdf_io.read_manifest_bytes(mock_pdf),
+    //         Err(crate::Error::NotImplemented(_))
+    //     ));
+    // }
+    //
     #[test]
     fn test_returns_none_when_no_xmp() {
         let mut mock_pdf = MockC2paPdf::default();

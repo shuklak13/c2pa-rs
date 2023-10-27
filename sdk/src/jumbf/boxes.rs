@@ -2179,14 +2179,22 @@ impl BoxReader {
         // find out where we're starting...
         let start_pos = current_pos(reader).map_err(|_| JumbfParseError::InvalidBoxRange)?;
 
+        println!("Invalid Jumbf 1");
         // start with the initial jumb
         let jumb_header =
             BoxReader::read_header(reader).map_err(|_| JumbfParseError::InvalidJumbfHeader)?;
+        println!("Invalid Jumbf 2");
         if jumb_header.name == BoxType::Empty {
             return Err(JumbfParseError::UnexpectedEof);
         } else if jumb_header.name != BoxType::Jumb {
+            println!(
+                "Invalid Jumbf 3 {:?}, {:?}",
+                jumb_header.name,
+                BoxType::Jumb
+            );
             return Err(JumbfParseError::InvalidJumbfHeader);
         }
+        println!("Invalid Jumbf 4");
 
         // figure out where this particular box ends...
         let dest_pos = start_pos + jumb_header.size;
