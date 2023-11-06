@@ -25,6 +25,7 @@ use crate::{
     claim::Claim,
     status_tracker::{DetailedStatusTracker, StatusTracker},
     store::Store,
+    utils::base64,
     validation_status::ValidationStatus,
     Result,
 };
@@ -94,21 +95,36 @@ impl ManifestStoreReport {
         Ok(())
     }
 
-    /// Prints the certificate chain use to sign the active manifest
+    /// Prints the certificate chain used to sign the active manifest.
     #[cfg(feature = "file_io")]
     pub fn dump_cert_chain<P: AsRef<Path>>(path: P) -> Result<()> {
-        let mut validation_log = crate::status_tracker::DetailedStatusTracker::new();
-        let store = crate::store::Store::load_from_asset(path.as_ref(), true, &mut validation_log)?;
+        let mut validation_log = DetailedStatusTracker::new();
+        let store = Store::load_from_asset(path.as_ref(), true, &mut validation_log)?;
 
         let cert_str = store.get_provenance_cert_chain()?;
-        println!("{}", cert_str);
+        println!("{cert_str}");
         Ok(())
+    }
+
+    /// Returns the certificate chain used to sign the active manifest.
+    #[cfg(feature = "file_io")]
+    pub fn cert_chain<P: AsRef<Path>>(path: P) -> Result<String> {
+        let mut validation_log = DetailedStatusTracker::new();
+        let store = Store::load_from_asset(path.as_ref(), true, &mut validation_log)?;
+        store.get_provenance_cert_chain()
+    }
+
+    /// Returns the certificate used to sign the active manifest.
+    pub fn cert_chain_from_bytes(format: &str, bytes: &[u8]) -> Result<String> {
+        let mut validation_log = DetailedStatusTracker::new();
+        let store = Store::load_from_memory(format, bytes, true, &mut validation_log)?;
+        store.get_provenance_cert_chain()
     }
 
     /// Creates a ManifestStoreReport from an existing Store and a validation log
     pub(crate) fn from_store_with_log(
         store: &Store,
-        validation_log: &mut impl StatusTracker,
+        validation_log: &impl StatusTracker,
     ) -> Result<Self> {
         let mut report = Self::from_store(store)?;
 
@@ -133,7 +149,7 @@ impl ManifestStoreReport {
     pub fn from_bytes(format: &str, image_bytes: &[u8]) -> Result<Self> {
         let mut validation_log = DetailedStatusTracker::new();
         let store = Store::load_from_memory(format, image_bytes, true, &mut validation_log)?;
-        Self::from_store_with_log(&store, &mut validation_log)
+        Self::from_store_with_log(&store, &validation_log)
     }
 
     /// Creates a ManifestStoreReport from a file
@@ -141,7 +157,7 @@ impl ManifestStoreReport {
     pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self> {
         let mut validation_log = DetailedStatusTracker::new();
         let store = Store::load_from_asset(path.as_ref(), true, &mut validation_log)?;
-        Self::from_store_with_log(&store, &mut validation_log)
+        Self::from_store_with_log(&store, &validation_log)
     }
 
     /// create a json string representation of this structure, omitting binaries
@@ -168,7 +184,7 @@ impl ManifestStoreReport {
             let (label, instance) = Claim::assertion_label_from_link(&hashlink);
             let label = Claim::label_with_instance(&label, instance);
 
-            current_token.append(tree, format!("Assertion:{}", label));
+            current_token.append(tree, format!("Assertion:{label}"));
         }
 
         // recurse down ingredients
@@ -188,10 +204,8 @@ impl ManifestStoreReport {
                     } else {
                         format!("Asset:{}, Manifest:{}", ingredient_assertion.title, label)
                     };
-                    let new_token = tree.new_node(data);
-                    current_token.append_node(tree, new_token).map_err(|_err| {
-                        crate::Error::InvalidAsset("Bad Manifest graph".to_string())
-                    })?;
+
+                    let new_token = current_token.append(tree, data);
 
                     ManifestStoreReport::populate_node(
                         tree,
@@ -206,7 +220,7 @@ impl ManifestStoreReport {
                 let data = if name_only {
                     asset_name.to_string()
                 } else {
-                    format!("Asset:{}", asset_name)
+                    format!("Asset:{asset_name}")
                 };
                 current_token.append(tree, data);
             }
@@ -292,10 +306,15 @@ impl ManifestReport {
         Ok(Self {
             claim: serde_json::to_value(claim)?, // todo:  this will lose tagging info
             assertion_store,
-            credential_store: (!credential_store.is_empty()).then(|| credential_store),
+            credential_store: if !credential_store.is_empty() {
+                Some(credential_store)
+            } else {
+                None
+            },
             signature,
         })
     }
+
     /// create a json string representation of this structure, omitting binaries
     fn to_json(&self) -> String {
         let mut json = serde_json::to_string_pretty(self).unwrap_or_else(|e| e.to_string());
@@ -327,7 +346,7 @@ struct SignatureReport {
 
 // replace the value of any field in the json string with a given key with the string <omitted>
 fn omit_tag(mut json: String, tag: &str) -> String {
-    while let Some(index) = json.find(&format!("\"{}\": [", tag)) {
+    while let Some(index) = json.find(&format!("\"{tag}\": [")) {
         if let Some(idx2) = json[index..].find(']') {
             json = format!(
                 "{}\"{}\": \"<omitted>\"{}",
@@ -342,7 +361,7 @@ fn omit_tag(mut json: String, tag: &str) -> String {
 
 // make a base64 hash from the value of any field in the json string with key base64 hash
 fn b64_tag(mut json: String, tag: &str) -> String {
-    while let Some(index) = json.find(&format!("\"{}\": [", tag)) {
+    while let Some(index) = json.find(&format!("\"{tag}\": [")) {
         if let Some(idx2) = json[index..].find(']') {
             let idx3 = json[index..].find('[').unwrap_or_default(); // ok since we just found it
             let bytes: Vec<u8> =
@@ -352,7 +371,7 @@ fn b64_tag(mut json: String, tag: &str) -> String {
                 "{}\"{}\": \"{}\"{}",
                 &json[..index],
                 tag,
-                base64::encode(bytes),
+                base64::encode(&bytes),
                 &json[index + idx2 + 1..]
             );
         }
@@ -365,6 +384,8 @@ fn b64_tag(mut json: String, tag: &str) -> String {
 mod tests {
     #![allow(clippy::expect_used)]
 
+    use std::fs;
+
     use super::ManifestStoreReport;
     use crate::utils::test::fixture_path;
 
@@ -372,7 +393,22 @@ mod tests {
     fn manifest_store_report() {
         let path = fixture_path("CIE-sig-CA.jpg");
         let report = ManifestStoreReport::from_file(path).expect("load_from_asset");
-        println!("{}", report);
+        println!("{report}");
+    }
+
+    #[test]
+    fn manifest_get_certchain_from_bytes() {
+        let bytes = fs::read(fixture_path("CA.jpg")).expect("missing test asset");
+        assert!(ManifestStoreReport::cert_chain_from_bytes("jpg", &bytes).is_ok())
+    }
+
+    #[test]
+    fn manifest_get_certchain_from_bytes_no_manifest_err() {
+        let bytes = fs::read(fixture_path("no_manifest.jpg")).expect("missing test asset");
+        assert!(matches!(
+            ManifestStoreReport::cert_chain_from_bytes("jpg", &bytes),
+            Err(crate::Error::JumbfNotFound)
+        ))
     }
 
     #[test]
@@ -391,5 +427,24 @@ mod tests {
         let path = fixture_path(asset_name);
 
         ManifestStoreReport::dump_cert_chain(path).expect("dump certs");
+    }
+
+    #[test]
+    #[cfg(feature = "file_io")]
+    fn manifest_get_certchain() {
+        let asset_name = "CA.jpg";
+        let path = fixture_path(asset_name);
+        assert!(ManifestStoreReport::cert_chain(path).is_ok())
+    }
+
+    #[test]
+    #[cfg(feature = "file_io")]
+    fn manifest_get_certchain_no_manifest_err() {
+        let asset_name = "no_manifest.jpg";
+        let path = fixture_path(asset_name);
+        assert!(matches!(
+            ManifestStoreReport::cert_chain(path),
+            Err(crate::Error::JumbfNotFound)
+        ))
     }
 }

@@ -21,6 +21,7 @@ use crate::{
     error::{Error, Result},
     openssl::check_chain_order_der,
     status_tracker::{log_item, StatusTracker},
+    utils::base64,
     validation_status,
 };
 
@@ -91,7 +92,11 @@ pub fn get_ocsp_response(certs: &[Vec<u8>]) -> Option<OcspData> {
 
             let mut ocsp_req = ocsp::OcspRequest::new().ok()?;
             ocsp_req.add_id(cert_id).ok()?;
-            let request_str = format!("{}/{}", url.path(), base64::encode(ocsp_req.to_der().ok()?));
+            let request_str = format!(
+                "{}/{}",
+                url.path(),
+                base64::encode(&ocsp_req.to_der().ok()?)
+            );
             url.set_path(&request_str);
 
             let request = ureq::builder().redirects(5).build().get(url.as_str());
@@ -134,7 +139,10 @@ pub fn get_ocsp_response(certs: &[Vec<u8>]) -> Option<OcspData> {
 
                                     let output = OcspData {
                                         ocsp_der: ocsp_rsp,
-                                        next_update: DateTime::from_utc(next_update, chrono::Utc),
+                                        next_update: DateTime::from_naive_utc_and_offset(
+                                            next_update,
+                                            chrono::Utc,
+                                        ),
                                     };
 
                                     return Some(output);

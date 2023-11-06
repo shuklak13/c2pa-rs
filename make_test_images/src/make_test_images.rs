@@ -13,6 +13,7 @@
 
 //! Constructs a set of test images using a configuration script
 use std::{
+    collections::HashMap,
     fs,
     path::{Path, PathBuf},
 };
@@ -78,7 +79,7 @@ impl Config {
         let mut signcert_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         signcert_path.push(format!("../sdk/tests/fixtures/certs/{}.pub", self.alg));
         let mut pkey_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        pkey_path.push(format!("../sdk/tests/fixtures/certs/{}.pem", alg));
+        pkey_path.push(format!("../sdk/tests/fixtures/certs/{alg}.pem"));
         create_signer::from_files(signcert_path, pkey_path, alg, tsa_url)
     }
 }
@@ -181,7 +182,7 @@ impl MakeTestImages {
     fn make_image(&self, recipe: &Recipe) -> Result<PathBuf> {
         let src = recipe.parent.as_deref();
         let dst_path = self.make_path(&recipe.output);
-        println!("Creating {:?}", dst_path);
+        println!("Creating {dst_path:?}");
         // keep track of all actions here
         let mut actions = Actions::new();
 
@@ -199,6 +200,8 @@ impl MakeTestImages {
         }
 
         let generator = format!("{}/{}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"));
+        let software_agent = format!("{} {}", "Make Test Images", env!("CARGO_PKG_VERSION"));
+
         let mut manifest = Manifest::new(generator);
         manifest.set_vendor("contentauth".to_owned()); // needed for generating error cases below
 
@@ -209,6 +212,9 @@ impl MakeTestImages {
             manifest.add_assertion(&creative_work)?;
         }
 
+        // keep track of ingredient instances so we don't duplicate them
+        let mut ingredient_table = HashMap::new();
+
         // process parent first
         let mut img = match src {
             Some(src) => {
@@ -216,14 +222,19 @@ impl MakeTestImages {
 
                 let parent = Ingredient::from_file_with_options(src_path, &ImageOptions::new())?;
 
+                let instance_id = parent.instance_id().to_string();
+
                 actions = actions.add_action(
                     Action::new(c2pa_action::OPENED).set_instance_id(parent.instance_id()),
                 );
                 manifest.set_parent(parent)?;
 
+                // keep track of all ingredients we add via the instance Id
+                ingredient_table.insert(src, instance_id);
+
                 // load the image for editing
                 let mut img =
-                    image::open(src_path).context(format!("opening parent {:?}", src_path))?;
+                    image::open(src_path).context(format!("opening parent {src_path:?}"))?;
 
                 // adjust brightness to show we made an edit
                 img = img.brighten(30);
@@ -244,13 +255,14 @@ impl MakeTestImages {
                         *pixel = image::Rgb([r, 100, b]);
                     }
                 }
-                actions = actions
-                    .add_action(Action::new(c2pa_action::CREATED))
-                    .add_action(
-                        Action::new(c2pa_action::DRAWING)
-                            .set_parameter("name".to_owned(), "gradient")?,
-                    );
-
+                actions = actions.add_action(
+                    Action::new(c2pa_action::CREATED)
+                        .set_source_type(
+                            "http://cv.iptc.org/newscodes/digitalsourcetype/algorithmicMedia",
+                        )
+                        .set_software_agent(software_agent.as_str())
+                        .set_parameter("name".to_owned(), "gradient")?,
+                );
                 img
             }
         };
@@ -270,17 +282,25 @@ impl MakeTestImages {
 
                 // get the bits of the ingredient, resize it and overlay it on the base image
                 let img_ingredient =
-                    image::open(ing_path).context(format!("opening ingredient {:?}", ing_path))?;
+                    image::open(ing_path).context(format!("opening ingredient {ing_path:?}"))?;
                 let img_small = img_ingredient.thumbnail(width, height);
                 image::imageops::overlay(&mut img, &img_small, x, 0);
 
-                // create and add the ingredient
-                let ingredient =
-                    Ingredient::from_file_with_options(ing_path, &ImageOptions::new())?;
-                actions = actions.add_action(
-                    Action::new(c2pa_action::PLACED).set_instance_id(ingredient.instance_id()),
-                );
-                manifest.add_ingredient(ingredient);
+                // if we have already created an ingredient, get the instanceId, otherwise create a new one
+                let instance_id = match ingredient_table.get(ing.as_str()) {
+                    Some(id) => id.to_owned(),
+                    None => {
+                        let ingredient =
+                            Ingredient::from_file_with_options(ing_path, &ImageOptions::new())?;
+                        let instance_id = ingredient.instance_id().to_string();
+                        ingredient_table.insert(ing, instance_id.clone());
+                        manifest.add_ingredient(ingredient);
+                        instance_id
+                    }
+                };
+
+                actions = actions
+                    .add_action(Action::new(c2pa_action::PLACED).set_instance_id(instance_id));
 
                 x += width as i64;
             }
@@ -307,13 +327,13 @@ impl MakeTestImages {
         let src = recipe.parent.as_deref().unwrap_or_default();
         let src_path = &self.make_path(src);
         let dst_path = self.make_path(recipe.output.as_str());
-        println!("Creating OGP {:?}", dst_path);
+        println!("Creating OGP {dst_path:?}");
 
         let jumbf = jumbf_io::load_jumbf_from_file(&PathBuf::from(src_path))
-            .context(format!("loading OGP {:?}", src_path))?;
+            .context(format!("loading OGP {src_path:?}"))?;
         // save the edited image to our destination file
         let mut img =
-            image::open(Path::new(src_path)).context(format!("loading OGP image{:?}", src_path))?;
+            image::open(Path::new(src_path)).context(format!("loading OGP image{src_path:?}"))?;
         img = img.grayscale();
         img.save(&dst_path)
             .context(format!("saving OGP image{:?}", &dst_path))?;
@@ -330,7 +350,7 @@ impl MakeTestImages {
         let op = recipe.op.as_str();
         let src = recipe.parent.as_deref().unwrap_or_default();
         let dst_path = self.make_path(recipe.output.as_str());
-        println!("Creating Error op={} {:?}", op, dst_path);
+        println!("Creating Error op={op} {dst_path:?}");
 
         let (search_bytes, replace_bytes) = match op {
             // modify the XMP (change xmp magic id value) - this should cause a data hash mismatch (OTGP)
@@ -364,7 +384,7 @@ impl MakeTestImages {
         std::fs::copy(self.make_path(src), &dst_path).context("copying for make_err")?;
 
         Self::patch_file(&dst_path, search_bytes, replace_bytes)
-            .context(format!("patching {}", op))?;
+            .context(format!("patching {op}"))?;
 
         Ok(dst_path)
     }
@@ -372,10 +392,10 @@ impl MakeTestImages {
     /// copies a file from the parent to the output
     fn make_copy(&self, recipe: &Recipe) -> Result<PathBuf> {
         let dst_path = self.make_path(recipe.output.as_str());
-        println!("Copying {:?}", dst_path);
+        println!("Copying {dst_path:?}");
         let src = recipe.parent.as_deref().unwrap_or_default();
         let dst = recipe.output.as_str();
-        std::fs::copy(src, &dst_path).context(format!("copying {} to {}", src, dst))?;
+        std::fs::copy(src, &dst_path).context(format!("copying {src} to {dst}"))?;
         Ok(dst_path)
     }
 

@@ -12,7 +12,6 @@
 // each license.
 
 //! Exif Assertion
-//!
 use std::collections::HashMap;
 
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -24,7 +23,6 @@ use crate::{assertions::labels, Assertion, AssertionBase, AssertionJson, Error, 
 ///  See <https://c2pa.org/specifications/specifications/1.0/specs/C2PA_Specification.html#_exif_information>
 ///
 /// This does not yet define or validate individual fields, but will ensure the correct assertion structure
-///
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Exif {
     #[serde(rename = "@context", skip_serializing_if = "Option::is_none")]
@@ -169,7 +167,7 @@ pub mod tests {
             .insert("exif:GPSLatitude", "39,21.102N")
             .unwrap();
         manifest.add_assertion(&original).expect("adding assertion");
-        println!("{}", manifest);
+        println!("{manifest}");
         let exif: Exif = manifest
             .find_assertion(Exif::LABEL)
             .expect("find_assertion");
@@ -182,7 +180,7 @@ pub mod tests {
         let mut manifest = Manifest::new("my_app".to_owned());
         let original = Exif::from_json_str(SPEC_EXAMPLE).expect("from_json");
         manifest.add_assertion(&original).expect("adding assertion");
-        println!("{}", manifest);
+        println!("{manifest}");
         let exif: Exif = manifest
             .find_assertion(Exif::LABEL)
             .expect("find_assertion");
@@ -195,9 +193,9 @@ pub mod tests {
         let original = Exif::from_json_str(SPEC_EXAMPLE).expect("from_json");
         let assertion = original.to_assertion().expect("to_assertion");
         assert_eq!(assertion.content_type(), "application/json");
-        println!("{:?}", assertion);
+        println!("{assertion:?}");
         let result = Exif::from_assertion(&assertion).expect("from_assertion");
-        println!("{:?}", result);
+        println!("{result:?}");
         let latitude: String = result.get("exif:GPSLatitude").unwrap();
         assert_eq!(&latitude, "39,21.102N")
     }

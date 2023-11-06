@@ -12,8 +12,9 @@
 // each license.
 
 use chrono::{DateTime, Utc};
+use x509_parser::num_bigint::BigUint;
 
-#[cfg(feature = "sign")]
+#[cfg(feature = "openssl_sign")]
 use crate::openssl::{EcValidator, EdValidator, RsaValidator};
 use crate::{Result, SigningAlg};
 
@@ -21,6 +22,7 @@ use crate::{Result, SigningAlg};
 pub struct ValidationInfo {
     pub alg: Option<SigningAlg>, // validation algorithm
     pub date: Option<DateTime<Utc>>,
+    pub cert_serial_number: Option<BigUint>,
     pub issuer_org: Option<String>,
     pub validated: bool,     // claim signature is valid
     pub cert_chain: Vec<u8>, // certificate chain used to validate signature
@@ -69,7 +71,7 @@ pub(crate) fn get_validator(alg: SigningAlg) -> Box<dyn CoseValidator> {
     }
 }
 
-#[cfg(not(feature = "sign"))]
+#[cfg(not(feature = "openssl_sign"))]
 #[allow(dead_code)]
 pub(crate) fn get_validator(_alg: SigningAlg) -> Box<dyn CoseValidator> {
     Box::new(DummyValidator)
