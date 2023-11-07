@@ -76,7 +76,7 @@ pub enum ClaimAssetData<'a> {
 // stored separate from the Assertion to allow for late binding to the label.  Also,
 // we can load assertions in any order and know the position without re-parsing label. We also
 // save on parsing the cbor assertion each time we need its contents
-#[derive(PartialEq, Eq, Clone)]
+#[derive(Serialize, PartialEq, Eq, Clone)]
 pub struct ClaimAssertion {
     assertion: Assertion,
     instance: usize,
@@ -198,29 +198,29 @@ pub struct Claim {
     ingredients_store: HashMap<String, Vec<Claim>>,
 
     // internal scratch objects
-    #[serde(skip_deserializing, skip_serializing)]
+    #[serde(skip_deserializing)]
     box_prefix: String, // where in JUMBF heirachy should this claim exist
 
     #[serde(skip_deserializing, skip_serializing)]
     signature_val: Vec<u8>, // the signature of the loaded/saved claim
 
     // root of CAI store
-    #[serde(skip_deserializing, skip_serializing)]
+    #[serde(skip_deserializing)]
     #[allow(dead_code)]
     root: String,
 
     // internal scratch objects
-    #[serde(skip_deserializing, skip_serializing)]
+    #[serde(skip_deserializing)]
     label: String, // label of claim
 
     // Internal list of assertions for claim.
     // These are serialized manually based on need.
-    #[serde(skip_deserializing, skip_serializing)]
+    #[serde(skip_deserializing)]
     assertion_store: Vec<ClaimAssertion>,
 
     // Internal list of verifiable credentials for claim.
     // These are serialized manually based on need.
-    #[serde(skip_deserializing, skip_serializing)]
+    #[serde(skip_deserializing)]
     vc_store: Vec<(HashedUri, AssertionData)>,
 
     claim_generator: String, // generator of this claim
@@ -231,7 +231,7 @@ pub struct Claim {
     assertions: Vec<C2PAAssertion>, // list of assertion hashed URIs
 
     // original JSON bytes of claim; only present when reading from asset
-    #[serde(skip_deserializing, skip_serializing)]
+    #[serde(skip_deserializing)]
     original_bytes: Option<Vec<u8>>,
 
     // original JUMBF box order need to recalculate JUMBF box hash
@@ -250,7 +250,7 @@ pub struct Claim {
     #[serde(skip_serializing_if = "Option::is_none")]
     claim_generator_hints: Option<HashMap<String, Value>>,
 
-    #[serde(skip_deserializing, skip_serializing)]
+    #[serde(skip_deserializing)]
     data_boxes: Vec<(HashedUri, DataBox)>, /* list of the data boxes and their hashed URIs found for this manifest */
 }
 

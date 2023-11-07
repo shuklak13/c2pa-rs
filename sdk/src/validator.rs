@@ -12,16 +12,27 @@
 // each license.
 
 use chrono::{DateTime, Utc};
+use serde::Serializer;
+use serde_derive::Serialize;
 use x509_parser::num_bigint::BigUint;
+
+fn biguint_serializer<S>(x: &Option<BigUint>, s: S) -> std::result::Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    let serialized = x.clone().map(|x| x.to_string()).unwrap_or("".to_owned());
+    s.serialize_str(&serialized)
+}
 
 #[cfg(feature = "openssl_sign")]
 use crate::openssl::{EcValidator, EdValidator, RsaValidator};
 use crate::{Result, SigningAlg};
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Serialize)]
 pub struct ValidationInfo {
     pub alg: Option<SigningAlg>, // validation algorithm
     pub date: Option<DateTime<Utc>>,
+    #[serde(serialize_with = "biguint_serializer")]
     pub cert_serial_number: Option<BigUint>,
     pub issuer_org: Option<String>,
     pub validated: bool,     // claim signature is valid

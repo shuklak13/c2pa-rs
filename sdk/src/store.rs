@@ -19,6 +19,7 @@ use std::{
 use std::{fs, path::Path};
 
 use log::error;
+use serde::Serialize;
 
 use crate::{
     assertion::{
@@ -68,7 +69,7 @@ const MANIFEST_STORE_EXT: &str = "c2pa"; // file extension for external manifest
 /// A `Store` maintains a list of `Claim` structs.
 ///
 /// Typically, this list of `Claim`s represents all of the claims in an asset.
-#[derive(Debug)]
+#[derive(Serialize, Debug)]
 pub struct Store {
     claims_map: HashMap<String, usize>,
     manifest_box_hash_cache: HashMap<String, Vec<u8>>,

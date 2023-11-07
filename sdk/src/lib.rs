@@ -128,7 +128,7 @@ pub(crate) mod asset_handlers;
 pub(crate) mod asset_io;
 pub use asset_io::{CAIRead, CAIReadWrite};
 /// crate private declarations
-pub(crate) mod claim;
+pub mod claim;
 
 mod claim_generator_info;
 pub use claim_generator_info::ClaimGeneratorInfo;
@@ -141,15 +141,15 @@ pub(crate) mod hashed_uri;
 #[allow(dead_code)]
 pub(crate) mod jumbf;
 pub(crate) mod salt;
-pub(crate) mod status_tracker;
-pub(crate) mod store;
+pub mod status_tracker;
+pub mod store;
 pub(crate) mod time_stamp;
 pub(crate) mod utils;
 pub mod validation_status;
 pub use hash_utils::HashRange;
 pub(crate) use utils::{cbor_types, hash_utils};
 pub use utils::{cbor_types::DateT, hash_utils::hash_stream_by_alg};
-pub(crate) mod validator;
+pub mod validator;
 #[cfg(target_arch = "wasm32")]
 pub mod wasm;
 
